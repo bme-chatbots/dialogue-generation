@@ -103,6 +103,6 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-model
-data
+model/
+data/
 .vscode

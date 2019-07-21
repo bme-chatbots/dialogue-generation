@@ -1,7 +1,7 @@
 """
 
 @author:    Patrik Purgai
-@copyright: Copyright 2019, nmt
+@copyright: Copyright 2019, chatbot
 @license:   MIT
 @email:     purgai.patrik@gmail.com
 @date:      2019.04.04.
@@ -48,10 +48,10 @@ def setup_eval_args():
 def respond(text, model, fields, vocabs, indices, beam_size):
     """Translates the given text with beam search."""
     src_field, trg_field = fields
-    vec = text2ids(text, src_field)
+    ids = text2ids(text, src_field)
     preds, _ = beam_search(
         model=model, 
-        inputs=vec, 
+        inputs=ids, 
         indices=indices,
         beam_size=beam_size, 
         device=DEVICE)
@@ -62,8 +62,10 @@ def respond(text, model, fields, vocabs, indices, beam_size):
 
 def main():
     args = setup_eval_args()
-    state_dict = torch.load(join(args.model_dir, 'model.pt'))
-    fields = torch.load(join(args.model_dir, 'fields.pt'))
+    state_dict = torch.load(join(args.model_dir, 'model.pt'), 
+        map_location=DEVICE)
+    fields = torch.load(join(args.model_dir, 'fields.pt'), 
+        map_location=DEVICE)
 
     src_field, trg_field = fields['src'], fields['trg']
 
@@ -79,12 +81,14 @@ def main():
 
     while True:
         try:
+            print()
             text = input()
             output = respond(
                 text=text, model=model,
                 fields=fields, vocabs=vocabs,
                 indices=indices, beam_size=args.beam_size)
-            print(output)
+            print('{}'.format(output))
+            print()
             
         except KeyboardInterrupt:
             break
