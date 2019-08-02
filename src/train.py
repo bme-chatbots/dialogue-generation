@@ -16,6 +16,7 @@ import argparse
 import os
 
 from model import (
+    compute_size,
     create_model,
     setup_model_args)
 
@@ -34,7 +35,9 @@ except ImportError:
     APEX_INSTALLED = False
 
 from torch.nn.functional import (
-    cross_entropy, softmax)
+    cross_entropy, softmax,
+    kl_div, log_softmax)
+
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
@@ -72,7 +75,7 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=128,
+        default=16,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
@@ -87,6 +90,11 @@ def setup_train_args():
             '..', 'model.{}'.format(
                 datetime.today().strftime('%j%H%m'))),
         help='Path of the model checkpoints.')
+    parser.add_argument(
+        '--grad_acum_steps',
+        type=int,
+        default=3,
+        help='Number of steps for grad accum.')
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -103,7 +111,7 @@ def save_state(model, optimizer, avg_acc, epoch, path):
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'avg_acc': avg_acc,
-        'epoch': epoch
+        'epoch': epoch,
     }
     print('Saving model to {}'.format(model_path))
     # making sure the model saving is not left in a
@@ -128,7 +136,10 @@ def load_state(model, optimizer, path, device):
         model.load_state_dict(state_dict['model'])
         optimizer.load_state_dict(state_dict['optimizer'])
         print('Loading model from {}'.format(model_path))
-        return state_dict['avg_acc'], state_dict['epoch']
+        return (
+            state_dict['avg_acc'], 
+            state_dict['epoch']
+        )
 
     except FileNotFoundError:
         return 0, 0
@@ -144,31 +155,57 @@ def create_optimizer(args, parameters):
     return optimizer
 
 
-def compute_lr(step, factor=3e-3, warmup=50, eps=1e-7):
+def create_criterion(pad_idx, vocab_size, device, 
+                     smoothing=0.1):
     """
-    Calculates learning rate with warm up.
+    Creates label smoothing loss with kl-divergence for the
+    seq2seq model.
     """
-    if step < warmup:
-        return (1 + factor) ** step
-    else:
-        # after reaching maximum number of steps
-        # the lr is decreased by factor as well
-        return max(((1 + factor) ** warmup) *
-                   ((1 - factor) ** (step - warmup)), eps)
+    confidence = 1.0 - smoothing
+    # initializes the target distribution vector with 
+    # smoothing value divided by the number of other 
+    # valid tokens
+    smoothed = torch.full(
+        (vocab_size, ), smoothing / (vocab_size - 2))
+    smoothed = smoothed.to(device)
+    smoothed[pad_idx] = 0
+
+    def label_smoothing(outputs, targets):
+        """
+        Computes the kl-divergence between the preds and the 
+        smoothed target distribution.
+        """
+        smoothed_targets = smoothed.repeat(targets.size(0), 1)
+        smoothed_targets.scatter_(
+            1, targets.unsqueeze(1), confidence)
+        smoothed_targets.masked_fill_(
+            (targets == pad_idx).unsqueeze(1), 0)
+
+        return kl_div(outputs, smoothed_targets, 
+                      reduction='batchmean')
+
+    return label_smoothing
 
 
-def compute_loss(logits, targets):
+def compute_loss(outputs, labels, pad_idx, criterion):
     """
     Computes the loss and accuracy with masking.
     """
-    loss = cross_entropy(logits, targets)
+    logits = outputs[0]
 
-    scores = softmax(logits, dim=-1)
-    _, preds = scores.max(dim=-1)
+    scores = log_softmax(logits, dim=-1)
 
-    accuracy = (targets == preds).float().mean()
+    scores_view = scores.view(-1, scores.size(-1))
+    labels_view = labels.view(-1)
 
-    return loss, accuracy.item()
+    loss = criterion(scores_view, labels_view)
+
+    _, preds = scores_view.max(dim=-1)
+
+    accuracy = labels_view == preds
+    accuracy = accuracy.float().mean().item()
+
+    return loss, accuracy
 
 
 def main():
@@ -180,21 +217,34 @@ def main():
 
     # creating dataset and storing dataset splits, fields
     # as individual variables for convenience
-    train, valid, test, vocab_size = create_dataset(
+    datasets, tokenizer = create_dataset(
         args=args, device=device)
 
+    vocab_size = len(tokenizer)
+
     model = create_model(
-        args=args, vocab_size=vocab_size, device=device)
+        args=args, vocab_size=vocab_size,
+        device=device)
 
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())
 
+    pad_idx = tokenizer.convert_tokens_to_ids(
+        [tokenizer.pad_token])[0]
+
+    criterion = create_criterion(
+        pad_idx=pad_idx, vocab_size=vocab_size, 
+        device=device)
+
     best_avg_acc, init_epoch = load_state(
-        model, optimizer, args.model_dir, device)
+        model=model, optimizer=optimizer, 
+        path=args.model_dir, device=device)
 
     if args.mixed and args.cuda:
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
+
+    train, valid, test = datasets
 
     patience = 0
 
@@ -209,24 +259,33 @@ def main():
         """
         Performs a single step of training.
         """
-        optimizer.zero_grad()
+        inputs, labels = batch
 
-        inputs, attn_mask, labels = batch
-
-        inputs = convert_to_tensor(inputs)
-        attn_mask = convert_to_tensor(attn_mask)
         labels = convert_to_tensor(labels)
 
-        logits = model(
-            inputs=inputs, 
-            attn_mask=attn_mask)
+        # converting the batch of inputs to torch tensor
+        inputs = [convert_to_tensor(m) for m in inputs]
+        input_ids, attn_mask, perm_mask, target_map = inputs
+
+        # TODO token type ids
+
+        outputs = model(
+            input_ids=input_ids,
+            token_type_ids=input_ids, 
+            attention_mask=attn_mask,
+            perm_mask=perm_mask,
+            target_mapping=target_map.float())
 
         loss, accuracy = compute_loss(
-            logits=logits, 
-            targets=labels)
+            outputs=outputs, 
+            labels=labels,
+            criterion=criterion,
+            pad_idx=pad_idx)
 
         backward(loss)
+
         optimizer.step()
+        optimizer.zero_grad()
 
         return loss.item(), accuracy
 
@@ -234,19 +293,21 @@ def main():
         """
         Performs a single step of training.
         """
-        inputs, attn_mask, labels = batch
+        inputs, masks, labels = batch
 
         inputs = convert_to_tensor(inputs)
-        attn_mask = convert_to_tensor(attn_mask)
+        attn_mask = convert_to_tensor(masks)
         labels = convert_to_tensor(labels)
 
-        logits = model(
+        outputs = model(
             inputs=inputs, 
             attn_mask=attn_mask)
 
         loss, accuracy = compute_loss(
-            logits=logits, 
-            targets=labels)
+            outputs=outputs, 
+            labels=labels,
+            criterion=criterion,
+            pad_idx=pad_idx)
 
         return loss.item(), accuracy
 
@@ -262,11 +323,9 @@ def main():
         else:
             loss.backward()
 
-    scheduler = LambdaLR(optimizer, compute_lr)
-
     for epoch in range(init_epoch, args.epochs):
         # running training loop
-        loop = tqdm(train)
+        loop = tqdm(train())
         loop.set_description('{}'.format(epoch))
         model.train()
         avg_acc = []
@@ -279,12 +338,10 @@ def main():
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss, acc=accuracy))
 
-        scheduler.step()
-
         avg_acc = sum(avg_acc) / len(avg_acc)
         print('avg train acc: {:.4}'.format(avg_acc))
 
-        loop = tqdm(test)
+        loop = tqdm(valid())
         model.eval()
         avg_acc = []
 
@@ -305,12 +362,30 @@ def main():
         if avg_acc > best_avg_acc:
             best_avg_acc = avg_acc
             save_state(
-                model, optimizer, best_avg_acc,
-                epoch, args.model_dir)
+                model=model, optimizer=optimizer, 
+                avg_acc=best_avg_acc, epoch=epoch, 
+                path=args.model_dir)
+
         else:
             patience += 1
             if patience == args.patience:
                 break
+
+    loop = tqdm(test())
+    model.eval()
+    avg_acc = []
+
+    # running testing loop
+    with torch.no_grad():
+        for batch in loop:
+            loss, accuracy = eval_step(batch)
+
+            avg_acc.append(accuracy)
+
+            loop.set_postfix(ordered_dict=OrderedDict(
+                loss=loss, acc=accuracy))
+
+        avg_acc = sum(avg_acc) / len(avg_acc)
 
 
 if __name__ == '__main__':

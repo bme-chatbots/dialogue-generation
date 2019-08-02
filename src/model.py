@@ -13,37 +13,76 @@
 import torch
 import random
 
-from torch.nn.modules import Module
-from torch.nn.functional import (
-    log_softmax, softmax)
+from torch.nn.modules import (
+    ModuleList)
 
 from torch.nn import (
-    NLLLoss, LSTM, 
-    Embedding, Linear,
-    Softmax, Dropout)
+    Linear)
 
-
-from pytorch_transformers import XLNetModel
-
-
-NEAR_INF = 1e20
+from pytorch_transformers import (
+    XLNetLMHeadModel,
+    XLNetConfig,
+    XLNetModel)
 
 
 def setup_model_args(parser):
     """
     Sets up the model arguments.
     """
-    parser.add_argument(
-        '--hidden_size',
-        type=int,
-        default=256,
-        help='Hidden size of the model.')
-    parser.add_argument(
-        '--embedding_size',
-        type=int,
-        default=128,
-        help='Embedding dimension for the tokens.')
-    
+
 
 def create_model(args, vocab_size, device):
+    """
+    Creates the classifier and encoder model.
+    """
+    config = XLNetConfig.from_pretrained(
+        'xlnet-base-cased')
+
+    generator = XLNetGenerator(config)
+    generator.resize_token_embeddings(vocab_size)
+    generator = generator.to(device)
+
+    return generator
+
+
+def compute_size(model):
+    """
+    Computes the number of parameters of the model.
+    """
+    return sum(
+        p.numel() for 
+        p in model.parameters())
+
+
+class XLNetGenerator(XLNetLMHeadModel):
+    """
+    A version of XLNetLMHead that has bias
+    disabled in the projection layer.
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.transformer.layer = ModuleList([
+            layer for layer 
+            in self.transformer.layer[:2]
+        ])
+
+        self.lm_loss = Linear(
+            config.d_model, config.n_token, 
+            bias=False)
+
+        self.apply(self.init_weights)
+        self.tie_weights()
+
+
+def decode_nucleus(model, inputs, max_length=100):
+    pass
+
+
+def decode_topp(model, inputs, max_length=100):
+    pass
+
+
+def decode_greedy(model, inputs, max_length=100):
     pass

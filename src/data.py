@@ -14,12 +14,13 @@ import requests
 import shutil
 import os
 import random
-import re
 import json
 import copy
 
 from tqdm import tqdm
-from itertools import zip_longest, chain
+from itertools import (
+    zip_longest, chain)
+
 from math import ceil
 
 from os.path import (
@@ -61,11 +62,6 @@ def setup_data_args(parser):
         default=100000,
         help='Max number of examples in a single file.')
     parser.add_argument(
-        '--max_len',
-        type=int,
-        default=100,
-        help='Maximum length of the sequences.')
-    parser.add_argument(
         '--max_history',
         type=str,
         default=4,
@@ -73,7 +69,7 @@ def setup_data_args(parser):
     parser.add_argument(
         '--force_new',
         action='store_true',
-        help='If set recreates the dataset even if it exists.')
+        help='If set, the dataset is recreated even if it exists.')
 
 
 def download(args):
@@ -138,10 +134,9 @@ def grouper(iterable, group_size, fillvalue=None):
     """
     Collect data into fixed-length chunks or blocks
     """
-    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx"
-    args = [iter(iterable)] * group_size
+    groups = [iter(iterable)] * group_size
 
-    return zip_longest(*args, fillvalue=fillvalue)
+    return zip_longest(*groups, fillvalue=fillvalue)
 
 
 def save_examples(args, data_path, tokenizer):
@@ -153,7 +148,6 @@ def save_examples(args, data_path, tokenizer):
 
     special_ids = tokenizer.convert_tokens_to_ids([
         tokenizer.bos_token,
-        tokenizer.eos_token,
         SP1, SP2
     ])
 
@@ -161,6 +155,11 @@ def save_examples(args, data_path, tokenizer):
         args=args,
         data_path=data_path,
         tokenizer=tokenizer)
+
+    # adding lookup indices to source and target
+    # pairs for more efficient storage
+    dialogues = generate_indices(
+        dialogues=dialogues)
 
     groups = grouper(
         iterable=dialogues,
@@ -175,22 +174,41 @@ def save_examples(args, data_path, tokenizer):
 
         filenames.append(filename)
 
-        examples = [
-            (src, trg) for src, trg in
-            generate_examples(group, special_ids)
-        ]
+        examples, indices = zip(
+            *list(generate_examples(
+                dialogues=group,
+                special_ids=special_ids)))
 
-        torch.save({'examples': examples}, filename)
+        indices = list(chain(*indices))
+
+        dataset = {
+            'examples': examples,
+            'indices': indices
+        }
+
+        torch.save(dataset, filename)
         num_examples += len(examples)
 
     return filenames, num_examples
+
+
+def merge_history(history, sp1_id, sp2_id):
+    """
+    Merges a list of history sentences into a single
+    source example.
+    """
+    return list(chain(*[
+            [sp2_id if idx % 2 == 0 else sp1_id]
+            + seq for idx, seq
+            in enumerate(history[::-1])
+        ][::-1])) + [sp1_id]
 
 
 def generate_examples(dialogues, special_ids):
     """
     Generates id examples from dialogues.
     """
-    sos_id, eos_id, sp1_id, sp2_id = special_ids
+    sos_id, sp1_id, sp2_id = special_ids
 
     for example in dialogues:
         if example is None:
@@ -198,21 +216,15 @@ def generate_examples(dialogues, special_ids):
             # file so we can break from the loop
             break
 
-        source, target = example
-        source = list(chain(*[
-            [sp1_id if idx % 2 == 0 else sp2_id]
-            + seq for idx, seq
-            in enumerate(source[::-1])
-        ][::-1]))
+        (history, target), indices = example
 
-        # only the source sentence must have an
-        # sos provided because the target is sos
-        # is created by the model
+        # adding role tokens between segments
+        source = merge_history(
+            history, sp1_id, sp2_id)
 
-        source = [sos_id] + source + [eos_id]
-        target = target + [eos_id]
+        source = [sos_id] + source
 
-        yield source, target
+        yield (source, target), indices
 
 
 def generate_dialogues(args, data_path, tokenizer):
@@ -220,16 +232,36 @@ def generate_dialogues(args, data_path, tokenizer):
     Generates dialogues from the raw dailydialog file.
     """
     for dialogue in tqdm(read_file(data_path)):
-        ids = []
-        for utterance in dialogue:
-            ids.append(tokenizer.encode(utterance))
+        encoded = [tokenizer.encode(u) for u in dialogue]
 
-        for end_idx in range(1, len(ids)):
+        for end_idx in range(1, len(encoded)):
             begin_idx = max(end_idx - args.max_history, 0)
-            source = [text for text in ids[begin_idx:end_idx]]
-            target = ids[end_idx]
+            history = [ids for ids in encoded[begin_idx:end_idx]]
+            target = encoded[end_idx]
 
-            yield source, target
+            eos_id = tokenizer.convert_tokens_to_ids([
+                tokenizer.eos_token])[0]
+            target.append(eos_id)
+
+            yield history, target
+
+
+def generate_indices(dialogues):
+    """
+    Generates input - label indices for the dialogues.
+    """
+    for idx, (history, target) in enumerate(dialogues):
+        # storing the length of the dialogues for
+        # the bucket iterator
+        indices = [
+            (idx, target_idx,
+                sum(len(s) for s in history) +
+                len(target[:target_idx]))
+            for target_idx
+            in range(1, len(target))
+        ]
+
+        yield (history, target), indices
 
 
 def read_file(data_path):
@@ -244,48 +276,90 @@ def read_file(data_path):
             yield [ex['text'] for ex in dialogue]
 
 
-def create_loader(args, filenames, num_examples, shuffle=False):
+def create_loader(args, filenames, num_examples,
+                  shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
     """
-    file_dataset = FileDataset(filenames)
-    file_loader = DataLoader(
-        file_dataset, 
-        collate_fn=lambda x: x[0])
+    def loader():
+        """
+        Generator that loads examples from files
+        lazily.
+        """
+        file_dataset = FileDataset(filenames)
+        file_loader = DataLoader(
+            file_dataset,
+            collate_fn=lambda x: x[0])
 
-    for examples in file_loader:
-        sampler = BucketSampler(
-            examples, shuffle=shuffle)
+        for examples, indices in file_loader:
+            sampler = BucketSampler(
+                indices, shuffle=shuffle)
 
-        example_loader = DataLoader(
-            examples, 
-            batch_size=args.batch_size,
-            num_workers=4, 
-            sampler=sampler, 
-            pin_memory=True, 
-            collate_fn=padded_collate)
+            example_loader = DataLoader(
+                DialogDataset(examples, indices),
+                batch_size=args.batch_size,
+                num_workers=4,
+                sampler=sampler,
+                pin_memory=True,
+                collate_fn=padded_collate)
 
-        yield from example_loader
+            yield from example_loader
+
+    return loader
 
 
 class FileDataset(Dataset):
+    """
+    Dataset that contains filenames for loading
+    lazily.
+    """
 
     def __init__(self, filenames):
         self.filenames = filenames
 
     def __getitem__(self, idx):
         filename = self.filenames[idx]
-        examples = torch.load(
-            filename)['examples']
+        dataset = torch.load(filename)
 
-        return examples
+        indices = dataset['indices']
+        examples = dataset['examples']
+
+        return examples, indices
 
     def __len__(self):
         return len(self.filenames)
 
 
+class DialogDataset(Dataset):
+    """
+    Fetches utterances from a list of examples.
+    """
+
+    def __init__(self, examples, indices):
+        self.examples = examples
+        self.indices = indices
+
+    def __getitem__(self, idx):
+        example_idx, target_idx, _ = self.indices[idx]
+        source, target = self.examples[example_idx]
+
+        inputs = source + target[:target_idx]
+        label = target[target_idx]
+
+        # nested lists for convenient parameter
+        # passing to collate_fn
+        return [inputs, [label]]
+
+    def __len__(self):
+        return len(self.indices)
+
+
 class BucketSampler(Sampler):
+    """
+    Iterator that creates batches from similar length
+    sequences.
+    """
 
     def __init__(self, data_source, bucket_size=1000,
                  shuffle=True):
@@ -294,11 +368,13 @@ class BucketSampler(Sampler):
 
         self.sorted = sorted(
             range(len(data_source)),
-            key=lambda i: len(data_source[i][0]))
+            key=lambda i: data_source[2])
 
     def __iter__(self):
         for idx in range(
                 0, len(self.sorted), self.bucket_size):
+            # divides the data into bucket size segments
+            # and only these segment are shuffled
             indices = self.sorted[idx: idx + self.bucket_size]
             indices = list(copy.deepcopy(indices))
 
@@ -330,7 +406,8 @@ def create_dataset(args, device):
 
         tokenizer = XLNetTokenizer.from_pretrained(
             'xlnet-base-cased')
-        tokenizer.add_tokens([SP1, SP2])
+        tokenizer.add_special_tokens(
+            {'sp1_token': SP1, 'sp2_token': SP2})
 
         (train_files, train_size), \
             (valid_files, valid_size), \
@@ -339,11 +416,12 @@ def create_dataset(args, device):
 
         tokenizer.save_pretrained(args.data_dir)
 
+        print('Saving metadata to {}'.format(metadata_path))
         # save the location of the files in a metadata
         # json object and delete the file in case of
         # interrupt so it wont be left in corrupted state
         with open(metadata_path, 'w') as fh:
-            try: 
+            try:
                 json.dump({
                     'train': [train_files, train_size],
                     'valid': [valid_files, valid_size],
@@ -353,6 +431,7 @@ def create_dataset(args, device):
                 shutil.rmtree(metadata_path)
 
     else:
+        print('Loading metadata from {}'.format(metadata_path))
         with open(metadata_path, 'r') as fh:
             filenames = json.load(fh)
 
@@ -365,20 +444,18 @@ def create_dataset(args, device):
 
     train = create_loader(
         args=args, 
-        filenames=train_files, 
-        num_examples=train_size,
+        filenames=train_files,
+        num_examples=train_size, 
         shuffle=True)
 
     valid = create_loader(
-        args=args, 
-        filenames=valid_files, 
+        args=args,
+        filenames=valid_files,
         num_examples=valid_size)
 
     test = create_loader(
-        args=args, 
-        filenames=test_files, 
+        args=args,
+        filenames=test_files,
         num_examples=test_size)
 
-    vocab_size = len(tokenizer)
-
-    return train, valid, test, vocab_size
+    return (train, valid, test), tokenizer

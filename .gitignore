@@ -106,3 +106,6 @@ venv.bak/
 model/
 data/
 .vscode
+
+*.html
+*.cpp

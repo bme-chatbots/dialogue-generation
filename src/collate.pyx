@@ -22,20 +22,18 @@ def padded_collate(vector[vector[vector[int]]] example):
     a batch tensor.
     """
     # unzipping the examples lists
-    cdef vector[vector[int]] source, target
+    cdef vector[vector[int]] inputs
+    cdef vector[int] labels
     cdef Py_ssize_t btc_idx, btc_size = example.size()
 
     for btc_idx in range(btc_size):
-        source.push_back(example[btc_idx][0])
-        target.push_back(example[btc_idx][1])
+        inputs.push_back(example[btc_idx][0])
+        labels.push_back(example[btc_idx][1][0])
     
-    cdef np.ndarray[np.int32_t, ndim=3] source_tensor = \
-        batchify(source)
+    # input_tensors contains the attention_mask and input_ids
+    input_tensors = batchify(inputs)
 
-    cdef np.ndarray[np.int32_t, ndim=3] target_tensor = \
-        batchify(target)
-
-    return source_tensor, target_tensor
+    return input_tensors, labels
 
 
 @cython.boundscheck(False)
@@ -57,27 +55,45 @@ cdef batchify(vector[vector[int]] ids):
         if utr_len > max_len:
             max_len = utr_len
 
-    cdef np.ndarray[np.int32_t, ndim=3] tensor = \
-        np.empty([2, btc_size, max_len], dtype=np.int32)
+    # inputs contains the input_ids and attention_mask
+    # inputs[0] -> input_ids inputs[1] -> attention_mask
+    cdef np.ndarray[np.int32_t, ndim=2] input_ids = \
+        np.empty([btc_size, max_len], dtype=np.int32)
 
-    cdef Py_ssize_t utr_size, tok_idx, diff_size, \
+    cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
+        np.empty([btc_size, max_len], dtype=np.int32)
+
+    cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
+        np.zeros([btc_size, max_len, max_len], dtype=np.int32)
+
+    cdef np.ndarray[np.int32_t, ndim=3] target_map = \
+        np.zeros([btc_size, 1, max_len], dtype=np.int32)
+
+    cdef Py_ssize_t utr_size, idx, diff_size, \
         diff_idx, pad_idx
 
-    # attention mask is 0 at non-pad values
-    # and 1 at pad values because it helps
-    # the use of masked_fill() method
-
+    # attention_mask values are according to 
+    # pytorch-transformers 1 -> UNMASKED and 0 -> MASKED
     for btc_idx in range(btc_size):
         utr_size = ids[btc_idx].size()
         diff_size = max_len - utr_size
-        for tok_idx in range(utr_size):
-            tensor[0, btc_idx, tok_idx] = \
-                ids[btc_idx][tok_idx]
-            tensor[1, btc_idx, tok_idx] = 0
+
+        target_map[btc_idx, 0, utr_size] = 1
+
+        for idx in range(utr_size):
+            # input_id
+            input_ids[btc_idx, idx] = \
+                ids[btc_idx][idx]
+            # attention_mask
+            attn_mask[btc_idx, idx] = 1
+
         for diff_idx in range(diff_size):
             pad_idx = utr_size + diff_idx 
-            # 0 is the hard coded pad idx
-            tensor[0, btc_idx, pad_idx] = 0
-            tensor[1, btc_idx, pad_idx] = 1
+            # 5 is the hard coded pad idx
+            input_ids[btc_idx, pad_idx] = 5
+            attn_mask[btc_idx, pad_idx] = 0
 
-    return tensor
+            for idx in range(max_len):
+                perm_mask[btc_idx, idx, pad_idx] = 1
+
+    return input_ids, attn_mask, perm_mask, target_map

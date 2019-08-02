@@ -1,7 +1,7 @@
 """
 
 @author:    Patrik Purgai
-@copyright: Copyright 2019, chatbot
+@copyright: Copyright 2019, supervised-translation
 @license:   MIT
 @email:     purgai.patrik@gmail.com
 @date:      2019.04.04.
@@ -16,83 +16,89 @@ import torch
 
 from os.path import join
 
-from beam import setup_beam_args, beam_search
-
 from data import (
-    ids2text, 
-    text2ids, 
-    get_special_indices)
+    setup_data_args,
+    create_dataset,
+    merge_history)
 
-from model import create_model, setup_model_args
-
-
-DEVICE = 'cpu'
+from model import (
+    create_model,
+    decode_greedy,
+    setup_model_args)
 
 
 def setup_eval_args():
-    """Sets up the arguments for evaluation."""
+    """
+    Sets up the arguments for evaluation.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--model_dir', 
+        '--model_dir',
         type=str,
         default=None,
         help='Path of the model file.')
+    parser.add_argument(
+        '--cuda',
+        type=bool,
+        default=False,
+        help='Device for evaluation.')
 
-    setup_beam_args(parser)
+    setup_data_args(parser)
     setup_model_args(parser)
 
     return parser.parse_args()
 
 
-@torch.no_grad()
-def respond(text, model, fields, vocabs, indices, beam_size):
-    """Translates the given text with beam search."""
-    src_field, trg_field = fields
-    ids = text2ids(text, src_field)
-    preds, _ = beam_search(
-        model=model, 
-        inputs=ids, 
-        indices=indices,
-        beam_size=beam_size, 
-        device=DEVICE)
-    output = ids2text(preds, trg_field)
-
-    return output
-
-
 def main():
     args = setup_eval_args()
-    state_dict = torch.load(join(args.model_dir, 'model.pt'), 
-        map_location=DEVICE)
-    fields = torch.load(join(args.model_dir, 'fields.pt'), 
-        map_location=DEVICE)
+    device = torch.device('cuda' if args.cuda else 'cpu')
 
-    src_field, trg_field = fields['src'], fields['trg']
+    state_dict = torch.load(
+        join(args.model_dir, 'model.pt'),
+        map_location=device)
 
-    fields = src_field, trg_field
-    vocabs = src_field.vocab, trg_field.vocab
-    indices = get_special_indices(vocabs)
-    
-    model = create_model(args, vocabs, indices, DEVICE)
+    _, tokenizer = create_dataset(args, device)
+
+    vocab_size = len(tokenizer)
+
+    model = create_model(args, vocab_size, device)
     model.load_state_dict(state_dict['model'])
     model.eval()
 
-    print('Type a sentence. CTRL + C to escape.')
+    history = []
 
+    def prepare_inputs():
+        """
+        Merges the history into a single example.
+        """
+        return merge_history(history[:args.max_history])
+
+    @torch.no_grad()
+    def respond(text):
+        """
+        Responds to the given text.
+        """
+        history.append(tokenizer.encode(text))
+        inputs = prepare_inputs()
+        _, preds = decode_greedy(model, inputs)
+        history.append(preds)
+
+        return tokenizer.decode(preds)
+
+    print('Type a sentence to translate. ' + \
+          'CTRL + C to escape.')
+          
     while True:
         try:
             print()
             text = input()
-            output = respond(
-                text=text, model=model,
-                fields=fields, vocabs=vocabs,
-                indices=indices, beam_size=args.beam_size)
-            print('{}'.format(output))
+            output = respond(text)
+            print(output)
             print()
-            
+
         except KeyboardInterrupt:
             break
-    
+
 
 if __name__ == '__main__':
     main()
