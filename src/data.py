@@ -115,17 +115,15 @@ def transform(args, tokenizer):
     """
     Transforms the dataset to numericalized format.
     """
-    extract_path = join(args.data_dir, 'dailydialog')
-
     print('Transforming dataset')
 
-    train_path = join(extract_path, 'train.json')
+    train_path = join(args.data_dir, 'train.json')
     train = save_examples(args, train_path, tokenizer)
 
-    valid_path = join(extract_path, 'valid.json')
+    valid_path = join(args.data_dir, 'valid.json')
     valid = save_examples(args, valid_path, tokenizer)
 
-    test_path = join(extract_path, 'test.json')
+    test_path = join(args.data_dir, 'test.json')
     test = save_examples(args, test_path, tokenizer)
 
     return train, valid, test
