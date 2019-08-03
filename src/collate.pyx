@@ -37,7 +37,7 @@ def padded_collate(vector[vector[vector[int]]] example):
     return input_tensors, labels
 
 
-def pad_inputs(input_ids, token_type_ids):
+def prepare_inputs(input_ids, token_type_ids):
     """
     Creates padded arrays from the provided inputs
     for the XLNet model during inference.

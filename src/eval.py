@@ -1,7 +1,6 @@
 """
-
 @author:    Patrik Purgai
-@copyright: Copyright 2019, supervised-translation
+@copyright: Copyright 2019, dialogue-generation
 @license:   MIT
 @email:     purgai.patrik@gmail.com
 @date:      2019.04.04.
@@ -27,7 +26,12 @@ from model import (
     setup_model_args)
 
 from collate import (
-    pad_inputs)
+    prepare_inputs)
+
+from numpy import inf
+
+from torch.nn.functional import (
+    softmax)
 
 
 def setup_eval_args():
@@ -48,13 +52,23 @@ def setup_eval_args():
     parser.add_argument(
         '--method',
         type=str,
-        default='greedy',
+        default='nucleus',
         help='Decoding method to use.')
     parser.add_argument(
         '--max_len',
         type=int,
         default=100,
         help='Maximum length of the decoded sequence.')
+    parser.add_argument(
+        '--top_p',
+        type=float,
+        default=0.9,
+        help='Top-p parameter for nucleus sampling.')
+    parser.add_argument(
+        '--top_k',
+        type=int,
+        default=100,
+        help='Top-k parameter for topk sampling.')
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -83,7 +97,7 @@ def decode(args, model, inputs, tokenizer, select_fn,
             tokenizer.eos_token
         ])
 
-    outputs, preds = [], []
+    preds = []
 
     for _ in range(args.max_len):
         curr_input_ids = [input_ids + \
@@ -92,7 +106,7 @@ def decode(args, model, inputs, tokenizer, select_fn,
         curr_token_type_ids = [token_type_ids + \
             [sp1_id] * (len(preds) + 1)]
 
-        inputs = pad_inputs(
+        inputs = prepare_inputs(
             input_ids=curr_input_ids,
             token_type_ids=curr_token_type_ids)
 
@@ -109,9 +123,11 @@ def decode(args, model, inputs, tokenizer, select_fn,
             perm_mask=perm_mask,
             target_mapping=target_map.float())[0]
 
-        pred = select_fn(logits)
+        logits = logits.squeeze()
+        logits = select_fn(args, logits)
+        probs = softmax(logits, dim=-1)
+        pred = torch.multinomial(probs, 1)
 
-        outputs.append(logits)
         preds.append(pred.item())
 
         # breaking after eos_id is seen
@@ -121,35 +137,45 @@ def decode(args, model, inputs, tokenizer, select_fn,
     else:
         preds.append(eos_id)
 
-    return outputs, preds
+    return preds
 
 
-def select_greedy(logits):
-    """
-    Applies greedy decoding.
-    """
-    _, pred = logits.max(dim=-1)
-    pred = pred.squeeze()
-
-    return pred
-
-
-def select_topk(logits):
+def select_topk(args, logits):
     """
     Applies topk sampling decoding.
     """
-    pass
+    indices_to_remove = logits < \
+        torch.topk(logits, args.top_k)[0][..., -1, None]
+    logits[indices_to_remove] = -inf
+
+    return logits
 
 
-def select_nucleus(logits):
+def select_nucleus(args, logits):
     """
     Applies nucleus decoding.
     """
-    pass
+    sorted_logits, sorted_indices = torch.sort(
+        logits, descending=True)
+
+    cumulative_probs = torch.cumsum(
+        softmax(sorted_logits, dim=-1), dim=-1)
+
+    sorted_indices_to_remove = \
+        cumulative_probs > args.top_p
+
+    sorted_indices_to_remove[..., 1:] = \
+        sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+
+    indices_to_remove = \
+        sorted_indices[sorted_indices_to_remove]
+    logits[indices_to_remove] = -inf
+
+    return logits
 
 
 METHODS = {
-    'greedy': select_greedy,
     'nucleus': select_topk,
     'topk': select_nucleus
 }
@@ -193,7 +219,7 @@ def main():
             sos_id=sos_id, sp1_id=sp1_id,
             sp2_id=sp2_id)
         
-        _, preds = decode(
+        preds = decode(
             args=args, model=model,
             inputs=inputs, tokenizer=tokenizer,
             select_fn=select_fn, device=device)

@@ -1,21 +1,18 @@
 # Dialogue generation
 
-Implementation of a neural dialogue generator model with pretrained XLNet architecture *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* on daily dialog dataset *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)*.
+Implementation of a neural dialogue generator model with pretrained XLNet architecture *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* on daily dialog dataset *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)*. For decoding I use top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)*.
 
 ## Usage
 
 The model uses mixed precision training from nvidia/apex. Note that apex is not required and is only used if it is available. For installation guide of this module see the official [instructions](https://github.com/NVIDIA/apex).
 
-The model can be trained with the following command.
-Note that `<data_dir>` and `<model_dir>` are optional,
-as they are provided by default. Training with different hyperparameters can be done by running the `train.py` script and passing the desired options as command line arguments.
+The model can be trained with the following command. Note that `<data_dir>` and `<model_dir>` are optional, as they are provided by default. Training with different hyperparameters can be done by running the `train.py` script and passing the desired options as command line arguments.
 
 ```bash
 ./run.sh "train" "<data_dir>" "<model_dir>"
 ```
 
-An interactive evaluation mode is available on the trained model by
-switching the `train` to the `eval` flag.
+An interactive evaluation mode is available on the trained model by switching the `train` to the `eval` flag.
 
 ```bash
 ./run.sh "eval" "<data_dir>" "<model_dir>"

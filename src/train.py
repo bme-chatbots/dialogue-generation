@@ -41,7 +41,8 @@ from torch.nn.functional import (
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
 
-from pytorch_transformers import WarmupLinearSchedule
+from pytorch_transformers import (
+    WarmupLinearSchedule)
 
 from os.path import (
     exists, join,
@@ -101,7 +102,6 @@ def setup_train_args():
         type=int,
         default=200,
         help='Number of steps for warmup schedule.')
-
 
     setup_data_args(parser)
     setup_model_args(parser)
