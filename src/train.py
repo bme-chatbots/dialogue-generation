@@ -64,10 +64,11 @@ def setup_train_args():
         type=bool,
         default=torch.cuda.is_available(),
         help='Device for training.')
+    # TODO XLNet produces NaN with apex
     parser.add_argument(
         '--mixed',
         type=bool,
-        default=APEX_INSTALLED,
+        default=False,
         help='Use mixed precision training.')
     parser.add_argument(
         '--learning_rate',
@@ -77,7 +78,7 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=16,
+        default=64,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
