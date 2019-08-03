@@ -1,6 +1,6 @@
 # Dialogue generation
 
-Implementation of a neural dialogue generator model with pretrained XLNet architecture *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* on daily dialog dataset *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)*. For decoding I use top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)*.
+Implementation of a neural dialogue generator model with pretrained XLNet architecture *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* on daily dialog dataset *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)*. Top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)* are available as decoding techniques.
 
 ## Usage
 

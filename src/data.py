@@ -417,17 +417,20 @@ class BucketSampler(Sampler):
             key=lambda i: data_source[i][2])
 
     def __iter__(self):
-        for idx in range(
-                0, len(self.sorted), self.bucket_size):
-            # divides the data into bucket size segments
-            # and only these segment are shuffled
-            indices = self.sorted[idx: idx + self.bucket_size]
-            indices = list(deepcopy(indices))
+        # divides the data into bucket size segments
+        # and only these segment are shuffled
+        segments = [
+            self.sorted[idx: idx + self.bucket_size] for 
+            idx in range(0, len(self.sorted), self.bucket_size)]
 
+        # selecting seqgemnts in random order
+        random.shuffle(segments)
+        for segment in segments:
+            
             if self.shuffle:
-                random.shuffle(indices)
+                random.shuffle(segment)
 
-            yield from indices
+            yield from segment
 
     def __len__(self):
         return len(self.sorted)

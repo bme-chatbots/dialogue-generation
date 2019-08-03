@@ -24,6 +24,9 @@ from pytorch_transformers import (
     XLNetConfig,
     XLNetModel)
 
+from os.path import (
+    exists, join)
+
 
 def setup_model_args(parser):
     """
@@ -35,11 +38,26 @@ def create_model(args, vocab_size, device):
     """
     Creates the classifier and encoder model.
     """
+    config_path = join(args.model_dir, 'config.json')
+
+    if not exists(config_path):
+        config = XLNetConfig.from_pretrained(
+            'xlnet-base-cased')
+
+        generator = XLNetGenerator(config)
+        generator.resize_token_embeddings(vocab_size)
+
+        config.save_pretrained(args.model_dir)
+
+    # TODO huggingface output bias layer is bugged
+    # if the size of the embeddings is modified
+    # reloading the model with new config 
+    # fixes the problem
     config = XLNetConfig.from_pretrained(
-        'xlnet-base-cased')
+        args.model_dir)
 
     generator = XLNetGenerator(config)
-    generator.resize_token_embeddings(vocab_size)
+    
     generator = generator.to(device)
 
     return generator
@@ -63,14 +81,13 @@ class XLNetGenerator(XLNetLMHeadModel):
     def __init__(self, config):
         super().__init__(config)
 
-        # self.transformer.layer = ModuleList([
-        #     layer for layer 
-        #     in self.transformer.layer[:2]
-        # ])
+        self.transformer.layer = ModuleList([
+            layer for layer 
+            in self.transformer.layer[:2]
+        ])
 
         self.lm_loss = Linear(
-            config.d_model, config.n_token, 
-            bias=False)
+            config.d_model, config.n_token)
 
         self.apply(self.init_weights)
         self.tie_weights()

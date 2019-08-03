@@ -40,7 +40,7 @@ from torch.nn.functional import (
     kl_div, log_softmax)
 
 from torch.nn.utils import clip_grad_norm_
-from torch.optim import Adam
+from torch.optim import SGD
 
 from pytorch_transformers import (
     WarmupLinearSchedule)
@@ -102,7 +102,12 @@ def setup_train_args():
     parser.add_argument(
         '--warmup_steps',
         type=int,
-        default=200,
+        default=500,
+        help='Number of steps for warmup schedule.')
+    parser.add_argument(
+        '--total_steps',
+        type=int,
+        default=1000000,
         help='Number of steps for warmup schedule.')
 
     setup_data_args(parser)
@@ -162,7 +167,9 @@ def create_optimizer(args, parameters):
     Creates an adam or swats optimizer with cyclical 
     learning rate.
     """
-    optimizer = Adam(params=parameters, weight_decay=1e-6)
+    optimizer = SGD(
+        lr=args.learning_rate, params=parameters,
+        weight_decay=1e-6, nesterov=True, momentum=0.9)
 
     return optimizer
 
@@ -199,7 +206,7 @@ def create_criterion(pad_idx, vocab_size, device,
     return label_smoothing
 
 
-def compute_loss(outputs, labels, pad_idx, criterion):
+def compute_loss(outputs, labels, criterion):
     """
     Computes the loss and accuracy with masking.
     """
@@ -302,8 +309,7 @@ def main():
         loss, accuracy = compute_loss(
             outputs=outputs,
             labels=labels,
-            criterion=criterion,
-            pad_idx=pad_idx)
+            criterion=criterion)
 
         return loss, accuracy
 
@@ -325,7 +331,7 @@ def main():
         loss /= args.grad_accum_steps
 
         backward(loss)
-        clip_grad_norm(1.)
+        clip_grad_norm(1.0)
 
         step += 1
 
@@ -360,7 +366,7 @@ def main():
     scheduler = WarmupLinearSchedule(
         optimizer=optimizer,
         warmup_steps=args.warmup_steps,
-        t_total=args.max_epochs)
+        t_total=args.total_steps)
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
@@ -377,7 +383,7 @@ def main():
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss, acc=accuracy))
 
-        scheduler.step(epoch=epoch)
+            scheduler.step(epoch=step)
 
         avg_acc = sum(avg_acc) / len(avg_acc)
         print('avg train acc: {:.4}'.format(avg_acc))
