@@ -74,15 +74,3 @@ class XLNetGenerator(XLNetLMHeadModel):
 
         self.apply(self.init_weights)
         self.tie_weights()
-
-
-def decode_nucleus(model, inputs, max_length=100):
-    pass
-
-
-def decode_topp(model, inputs, max_length=100):
-    pass
-
-
-def decode_greedy(model, inputs, max_length=100):
-    pass

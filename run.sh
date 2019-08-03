@@ -16,7 +16,8 @@ then
                                         --download_dir $DOWNLOAD_DIR
 elif [ $RUN_MODE == "eval" ]
 then
-    python $(dirname "$0")/src/eval.py --model_dir $MODEL_DIR
+    python $(dirname "$0")/src/eval.py --model_dir $MODEL_DIR \
+                                       --data_dir $DATA_DIR
 else
     echo "Invalid run mode `$RUN_MODE`."
 fi

@@ -15,13 +15,14 @@ import shutil
 import os
 import random
 import json
-import copy
 
 from tqdm import tqdm
 from itertools import (
     zip_longest, chain)
 
 from math import ceil
+
+from copy import deepcopy
 
 from os.path import (
     exists, join,
@@ -192,16 +193,35 @@ def save_examples(args, data_path, tokenizer):
     return filenames, num_examples
 
 
-def merge_history(history, sp1_id, sp2_id):
+def transform_history(history, sos_id, sp1_id, sp2_id):
     """
     Merges a list of history sentences into a single
-    source example.
+    source example with tpye ids and also produces
+    token type ids list.
     """
-    return list(chain(*[
-            [sp2_id if idx % 2 == 0 else sp1_id]
-            + seq for idx, seq
-            in enumerate(history[::-1])
-        ][::-1])) + [sp1_id]
+    input_ids, token_type_ids = [], []
+
+    # iterating on reversed history because the last
+    # utterance is always from speaker2 thus it is
+    # easier to assign the speaker id
+    for idx, utr in enumerate(history[::-1]):
+        type_id = sp2_id if idx % 2 == 0 else sp1_id
+        
+        # adding type id to the beginning of each utr
+        ids = [type_id] + utr
+        
+        input_ids.append(ids)
+        token_type_ids.append([type_id] * len(ids))
+
+    # adding start id to the begining of the dialogue
+    input_ids = [sos_id] + \
+        list(chain(*input_ids[::-1])) + [sp1_id]
+    # adding the token type id of the start id as well
+    token_type_ids = [type_id] + \
+        list(chain(*token_type_ids[::-1])) + \
+        [sp1_id]
+
+    return input_ids, token_type_ids
 
 
 def generate_examples(dialogues, special_ids):
@@ -218,13 +238,12 @@ def generate_examples(dialogues, special_ids):
 
         (history, target), indices = example
 
-        # adding role tokens between segments
-        source = merge_history(
-            history, sp1_id, sp2_id)
+        # adding special ids between segments and merging
+        # dialogue history into a single sequence
+        input_ids, token_type_ids = transform_history(
+            history, sos_id, sp1_id, sp2_id)
 
-        source = [sos_id] + source
-
-        yield (source, target), indices
+        yield (input_ids, token_type_ids, target), indices
 
 
 def generate_dialogues(args, data_path, tokenizer):
@@ -277,11 +296,15 @@ def read_file(data_path):
 
 
 def create_loader(args, filenames, num_examples,
-                  shuffle=False):
+                  tokenizer, shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
     """
+    mask_id, sp1_id = tokenizer.convert_tokens_to_ids([
+        tokenizer.mask_token, SP1
+    ])
+
     def loader():
         """
         Generator that loads examples from files
@@ -296,8 +319,14 @@ def create_loader(args, filenames, num_examples,
             sampler = BucketSampler(
                 indices, shuffle=shuffle)
 
+            dialog_dataset = DialogDataset(
+                examples=examples, 
+                indices=indices,
+                mask_id=mask_id,
+                sp1_id=sp1_id)
+
             example_loader = DataLoader(
-                DialogDataset(examples, indices),
+                dialog_dataset,
                 batch_size=args.batch_size,
                 num_workers=4,
                 sampler=sampler,
@@ -336,20 +365,37 @@ class DialogDataset(Dataset):
     Fetches utterances from a list of examples.
     """
 
-    def __init__(self, examples, indices):
+    def __init__(self, examples, indices, mask_id, 
+                 sp1_id):
         self.examples = examples
         self.indices = indices
+        self.mask_id = mask_id
+        self.sp1_id = sp1_id
 
     def __getitem__(self, idx):
         example_idx, target_idx, _ = self.indices[idx]
-        source, target = self.examples[example_idx]
+        input_ids, token_type_ids, target = \
+            self.examples[example_idx]
 
-        inputs = source + target[:target_idx]
+        input_ids = deepcopy(input_ids)
+        token_type_ids = deepcopy(token_type_ids)
+        curr_target = target[:target_idx]
+
+        # adding the first `target_idx` num of target
+        # ids to inputs and the mask_id
+        input_ids.extend(curr_target)
+        input_ids.append(self.mask_id)
+
+        # the token types are extended with the
+        # type ids of the previous extension
+        token_type_ids.extend(
+            [self.sp1_id] * (len(curr_target) + 1))
+
         label = target[target_idx]
 
-        # nested lists for convenient parameter
-        # passing to collate_fn
-        return [inputs, [label]]
+        # returning nested lists for convenient 
+        # parameter passing to collate_fn
+        return [input_ids, token_type_ids, [label]]
 
     def __len__(self):
         return len(self.indices)
@@ -376,7 +422,7 @@ class BucketSampler(Sampler):
             # divides the data into bucket size segments
             # and only these segment are shuffled
             indices = self.sorted[idx: idx + self.bucket_size]
-            indices = list(copy.deepcopy(indices))
+            indices = list(deepcopy(indices))
 
             if self.shuffle:
                 random.shuffle(indices)
@@ -446,16 +492,19 @@ def create_dataset(args, device):
         args=args, 
         filenames=train_files,
         num_examples=train_size, 
+        tokenizer=tokenizer,
         shuffle=True)
 
     valid = create_loader(
         args=args,
         filenames=valid_files,
-        num_examples=valid_size)
+        num_examples=valid_size,
+        tokenizer=tokenizer)
 
     test = create_loader(
         args=args,
         filenames=test_files,
-        num_examples=test_size)
+        num_examples=test_size,
+        tokenizer=tokenizer)
 
     return (train, valid, test), tokenizer

@@ -1,6 +1,6 @@
 """
 @author:    Patrik Purgai
-@copyright: Copyright 2019, sentiment-analysis
+@copyright: Copyright 2019, dialogue-generation
 @license:   MIT
 @email:     purgai.patrik@gmail.com
 @date:      2019.07.12.
@@ -40,7 +40,8 @@ from torch.nn.functional import (
 
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adam
-from torch.optim.lr_scheduler import LambdaLR
+
+from pytorch_transformers import WarmupLinearSchedule
 
 from os.path import (
     exists, join,
@@ -53,7 +54,7 @@ def setup_train_args():
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--epochs',
+        '--max_epochs',
         type=int,
         default=1000,
         help='Maximum number of epochs for training.')
@@ -81,7 +82,7 @@ def setup_train_args():
         '--patience',
         type=int,
         default=10,
-        help='Number of steps before restart.')
+        help='Number of patience epochs before termination.')
     parser.add_argument(
         '--model_dir',
         type=str,
@@ -91,10 +92,16 @@ def setup_train_args():
                 datetime.today().strftime('%j%H%m'))),
         help='Path of the model checkpoints.')
     parser.add_argument(
-        '--grad_acum_steps',
+        '--grad_accum_steps',
         type=int,
         default=3,
         help='Number of steps for grad accum.')
+    parser.add_argument(
+        '--warmup_steps',
+        type=int,
+        default=200,
+        help='Number of steps for warmup schedule.')
+
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -102,7 +109,8 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def save_state(model, optimizer, avg_acc, epoch, path):
+def save_state(model, optimizer, avg_acc, epoch, step, 
+               path):
     """
     Saves the model and optimizer state.
     """
@@ -112,6 +120,7 @@ def save_state(model, optimizer, avg_acc, epoch, path):
         'optimizer': optimizer.state_dict(),
         'avg_acc': avg_acc,
         'epoch': epoch,
+        'step': step
     }
     print('Saving model to {}'.format(model_path))
     # making sure the model saving is not left in a
@@ -138,11 +147,12 @@ def load_state(model, optimizer, path, device):
         print('Loading model from {}'.format(model_path))
         return (
             state_dict['avg_acc'], 
-            state_dict['epoch']
+            state_dict['epoch'],
+            state_dict['step']
         )
 
     except FileNotFoundError:
-        return 0, 0
+        return 0, 0, 0
 
 
 def create_optimizer(args, parameters):
@@ -215,7 +225,7 @@ def main():
     args = setup_train_args()
     device = torch.device('cuda' if args.cuda else 'cpu')
 
-    # creating dataset and storing dataset splits, fields
+    # creating dataset and storing dataset splits
     # as individual variables for convenience
     datasets, tokenizer = create_dataset(
         args=args, device=device)
@@ -230,13 +240,14 @@ def main():
         args=args, parameters=model.parameters())
 
     pad_idx = tokenizer.convert_tokens_to_ids(
-        [tokenizer.pad_token])[0]
+        tokenizer.pad_token)
 
     criterion = create_criterion(
         pad_idx=pad_idx, vocab_size=vocab_size, 
         device=device)
 
-    best_avg_acc, init_epoch = load_state(
+    # loading previous state of the training
+    best_avg_acc, init_epoch, step = load_state(
         model=model, optimizer=optimizer, 
         path=args.model_dir, device=device)
 
@@ -255,9 +266,9 @@ def main():
         """
         return torch.as_tensor(ids).long().to(device)
 
-    def train_step(batch):
+    def forward_step(batch):
         """
-        Performs a single step of training.
+        Applies forward pass with the given batch.
         """
         inputs, labels = batch
 
@@ -265,13 +276,13 @@ def main():
 
         # converting the batch of inputs to torch tensor
         inputs = [convert_to_tensor(m) for m in inputs]
-        input_ids, attn_mask, perm_mask, target_map = inputs
 
-        # TODO token type ids
+        input_ids, token_type_ids, attn_mask, \
+            perm_mask, target_map = inputs
 
         outputs = model(
             input_ids=input_ids,
-            token_type_ids=input_ids, 
+            token_type_ids=token_type_ids, 
             attention_mask=attn_mask,
             perm_mask=perm_mask,
             target_mapping=target_map.float())
@@ -282,32 +293,33 @@ def main():
             criterion=criterion,
             pad_idx=pad_idx)
 
-        backward(loss)
+        return loss, accuracy
 
-        optimizer.step()
-        optimizer.zero_grad()
-
-        return loss.item(), accuracy
-
-    def eval_step(batch):
+    def train_step(batch):
         """
         Performs a single step of training.
         """
-        inputs, masks, labels = batch
+        nonlocal step
 
-        inputs = convert_to_tensor(inputs)
-        attn_mask = convert_to_tensor(masks)
-        labels = convert_to_tensor(labels)
+        loss, accuracy = forward_step(batch)
 
-        outputs = model(
-            inputs=inputs, 
-            attn_mask=attn_mask)
+        if torch.isnan(loss).item():
+            print('skipping step (nan loss)')
+            # returning None values when a NaN loss
+            # is encountered and skipping backprop
+            # so model grads will not be corrupted
+            return None, None
 
-        loss, accuracy = compute_loss(
-            outputs=outputs, 
-            labels=labels,
-            criterion=criterion,
-            pad_idx=pad_idx)
+        loss /= args.grad_accum_steps
+
+        backward(loss)
+        clip_grad_norm(1.)
+
+        step += 1
+
+        if step % args.grad_accum_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
         return loss.item(), accuracy
 
@@ -323,7 +335,22 @@ def main():
         else:
             loss.backward()
 
-    for epoch in range(init_epoch, args.epochs):
+    def clip_grad_norm(max_norm):
+        """
+        Applies gradient clipping.
+        """
+        if args.mixed and args.cuda:
+            clip_grad_norm_(
+                amp.master_params(optimizer), max_norm)
+        else:
+            clip_grad_norm_(model.parameters(), max_norm)
+
+    scheduler = WarmupLinearSchedule(
+        optimizer=optimizer, 
+        warmup_steps=args.warmup_steps,
+        t_total=args.max_epochs)
+
+    for epoch in range(init_epoch, args.max_epochs):
         # running training loop
         loop = tqdm(train())
         loop.set_description('{}'.format(epoch))
@@ -338,6 +365,8 @@ def main():
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss, acc=accuracy))
 
+        scheduler.step(epoch=epoch)
+
         avg_acc = sum(avg_acc) / len(avg_acc)
         print('avg train acc: {:.4}'.format(avg_acc))
 
@@ -348,7 +377,7 @@ def main():
         # running validation loop
         with torch.no_grad():
             for batch in loop:
-                loss, accuracy = eval_step(batch)
+                loss, accuracy = forward_step(batch)
 
                 avg_acc.append(accuracy)
 
@@ -364,7 +393,7 @@ def main():
             save_state(
                 model=model, optimizer=optimizer, 
                 avg_acc=best_avg_acc, epoch=epoch, 
-                path=args.model_dir)
+                step=step, path=args.model_dir)
 
         else:
             patience += 1
@@ -378,7 +407,7 @@ def main():
     # running testing loop
     with torch.no_grad():
         for batch in loop:
-            loss, accuracy = eval_step(batch)
+            loss, accuracy = forward_step(batch)
 
             avg_acc.append(accuracy)
 

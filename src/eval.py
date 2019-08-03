@@ -19,12 +19,15 @@ from os.path import join
 from data import (
     setup_data_args,
     create_dataset,
-    merge_history)
+    transform_history,
+    SP1, SP2)
 
 from model import (
     create_model,
-    decode_greedy,
     setup_model_args)
+
+from collate import (
+    pad_inputs)
 
 
 def setup_eval_args():
@@ -42,11 +45,114 @@ def setup_eval_args():
         type=bool,
         default=False,
         help='Device for evaluation.')
+    parser.add_argument(
+        '--method',
+        type=str,
+        default='greedy',
+        help='Decoding method to use.')
+    parser.add_argument(
+        '--max_len',
+        type=int,
+        default=100,
+        help='Maximum length of the decoded sequence.')
 
     setup_data_args(parser)
     setup_model_args(parser)
 
     return parser.parse_args()
+
+
+def decode(args, model, inputs, tokenizer, select_fn,
+           device):
+    """
+    Applies decoding given a model and inputs.
+    """
+    def convert_to_tensor(ids):
+        """
+        Convenience function for converting int32
+        ndarray to torch int64.
+        """
+        return torch.as_tensor(ids).long().to(device)
+
+    input_ids, token_type_ids = inputs
+
+    mask_id, sp1_id, eos_id = \
+        tokenizer.convert_tokens_to_ids([
+            tokenizer.mask_token,
+            SP1,
+            tokenizer.eos_token
+        ])
+
+    outputs, preds = [], []
+
+    for _ in range(args.max_len):
+        curr_input_ids = [input_ids + \
+            preds + [mask_id]]
+        
+        curr_token_type_ids = [token_type_ids + \
+            [sp1_id] * (len(preds) + 1)]
+
+        inputs = pad_inputs(
+            input_ids=curr_input_ids,
+            token_type_ids=curr_token_type_ids)
+
+        padded_input_ids, padded_token_type_ids, \
+            attn_mask, perm_mask, target_map = [
+                convert_to_tensor(m) for m in inputs]
+        
+        # the first value of the output tuple from
+        # the model is the next token logits tensor
+        logits = model(
+            input_ids=padded_input_ids,
+            token_type_ids=padded_token_type_ids,
+            attention_mask=attn_mask,
+            perm_mask=perm_mask,
+            target_mapping=target_map.float())[0]
+
+        pred = select_fn(logits)
+
+        outputs.append(logits)
+        preds.append(pred.item())
+
+        # breaking after eos_id is seen
+        if preds[-1] == eos_id:
+            break
+
+    else:
+        preds.append(eos_id)
+
+    return outputs, preds
+
+
+def select_greedy(logits):
+    """
+    Applies greedy decoding.
+    """
+    _, pred = logits.max(dim=-1)
+    pred = pred.squeeze()
+
+    return pred
+
+
+def select_topk(logits):
+    """
+    Applies topk sampling decoding.
+    """
+    pass
+
+
+def select_nucleus(logits):
+    """
+    Applies nucleus decoding.
+    """
+    pass
+
+
+METHODS = {
+    'greedy': select_greedy,
+    'nucleus': select_topk,
+    'topk': select_nucleus
+}
 
 
 def main():
@@ -67,11 +173,13 @@ def main():
 
     history = []
 
-    def prepare_inputs():
-        """
-        Merges the history into a single example.
-        """
-        return merge_history(history[:args.max_history])
+    select_fn = METHODS[args.method]
+
+    sos_id, sp1_id, sp2_id = \
+        tokenizer.convert_tokens_to_ids([
+            tokenizer.bos_token,
+            SP1, SP2
+        ])
 
     @torch.no_grad()
     def respond(text):
@@ -79,15 +187,25 @@ def main():
         Responds to the given text.
         """
         history.append(tokenizer.encode(text))
-        inputs = prepare_inputs()
-        _, preds = decode_greedy(model, inputs)
+
+        inputs = transform_history(
+            history[:args.max_history],
+            sos_id=sos_id, sp1_id=sp1_id,
+            sp2_id=sp2_id)
+        
+        _, preds = decode(
+            args=args, model=model,
+            inputs=inputs, tokenizer=tokenizer,
+            select_fn=select_fn, device=device)
+
         history.append(preds)
 
-        return tokenizer.decode(preds)
+        # last token is the end token
+        return tokenizer.decode(preds[:-1])
 
-    print('Type a sentence to translate. ' + \
+    print('Type a sentence to translate. ' +
           'CTRL + C to escape.')
-          
+
     while True:
         try:
             print()
