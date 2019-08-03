@@ -103,11 +103,14 @@ def download(args):
                     if chunk:
                         f.write(chunk)
 
-    extract_path = join(args.data_dir, 'dailydialog')
+    train_path = join(args.data_dir, 'train.json')
+    valid_path = join(args.data_dir, 'valid.json')
+    test_path = join(args.data_dir, 'test.json')
 
-    if not exists(extract_path):
+    if not exists(train_path) or not \
+            exists(valid_path) or not exists(test_path):
         print('Extracting dataset to {}'.format(
-            extract_path))
+            args.data_dir))
         shutil.unpack_archive(download_path, args.data_dir)
 
 
