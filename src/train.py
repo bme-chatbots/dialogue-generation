@@ -74,7 +74,7 @@ def setup_train_args():
     parser.add_argument(
         '--learning_rate',
         type=float,
-        default=1e-4,
+        default=1e-3,
         help='Learning rate for the model.')
     parser.add_argument(
         '--batch_size',

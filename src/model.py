@@ -63,10 +63,10 @@ class XLNetGenerator(XLNetLMHeadModel):
     def __init__(self, config):
         super().__init__(config)
 
-        self.transformer.layer = ModuleList([
-            layer for layer 
-            in self.transformer.layer[:2]
-        ])
+        # self.transformer.layer = ModuleList([
+        #     layer for layer 
+        #     in self.transformer.layer[:2]
+        # ])
 
         self.lm_loss = Linear(
             config.d_model, config.n_token, 
