@@ -106,10 +106,13 @@ cdef batchify(
 
         for diff_idx in range(diff_size):
             pad_idx = utr_size + diff_idx 
-            # 5 is the hard coded pad idx
-            input_id_tensor[btc_idx, pad_idx] = 5
-            token_type_id_tensor[btc_idx, pad_idx] = 5
+            # 6 is the hard coded pad idx
+            input_id_tensor[btc_idx, pad_idx] = 6
+            token_type_id_tensor[btc_idx, pad_idx] = 6
             attn_mask[btc_idx, pad_idx] = 0
+
+            for idx in range(max_len):
+                perm_mask[btc_idx, idx, pad_idx] = 1
  
     return input_id_tensor, token_type_id_tensor, \
         attn_mask, perm_mask, target_map

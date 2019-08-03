@@ -26,6 +26,7 @@ from data import (
 
 from collections import OrderedDict
 from tqdm import tqdm
+from math import ceil
 from datetime import datetime
 
 try:
@@ -78,7 +79,7 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=64,
+        default=2,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
@@ -110,7 +111,7 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def save_state(model, optimizer, avg_acc, epoch, step, 
+def save_state(model, optimizer, avg_acc, epoch, step,
                path):
     """
     Saves the model and optimizer state.
@@ -147,7 +148,7 @@ def load_state(model, optimizer, path, device):
         optimizer.load_state_dict(state_dict['optimizer'])
         print('Loading model from {}'.format(model_path))
         return (
-            state_dict['avg_acc'], 
+            state_dict['avg_acc'],
             state_dict['epoch'],
             state_dict['step']
         )
@@ -166,15 +167,15 @@ def create_optimizer(args, parameters):
     return optimizer
 
 
-def create_criterion(pad_idx, vocab_size, device, 
+def create_criterion(pad_idx, vocab_size, device,
                      smoothing=0.1):
     """
     Creates label smoothing loss with kl-divergence for the
     seq2seq model.
     """
     confidence = 1.0 - smoothing
-    # initializes the target distribution vector with 
-    # smoothing value divided by the number of other 
+    # initializes the target distribution vector with
+    # smoothing value divided by the number of other
     # valid tokens
     smoothed = torch.full(
         (vocab_size, ), smoothing / (vocab_size - 2))
@@ -192,7 +193,7 @@ def create_criterion(pad_idx, vocab_size, device,
         smoothed_targets.masked_fill_(
             (targets == pad_idx).unsqueeze(1), 0)
 
-        return kl_div(outputs, smoothed_targets, 
+        return kl_div(outputs, smoothed_targets,
                       reduction='batchmean')
 
     return label_smoothing
@@ -244,12 +245,12 @@ def main():
         tokenizer.pad_token)
 
     criterion = create_criterion(
-        pad_idx=pad_idx, vocab_size=vocab_size, 
+        pad_idx=pad_idx, vocab_size=vocab_size,
         device=device)
 
     # loading previous state of the training
     best_avg_acc, init_epoch, step = load_state(
-        model=model, optimizer=optimizer, 
+        model=model, optimizer=optimizer,
         path=args.model_dir, device=device)
 
     if args.mixed and args.cuda:
@@ -257,6 +258,16 @@ def main():
             model, optimizer, opt_level='O2')
 
     train, valid, test = datasets
+
+    # computing the sizes of the splits
+    train_dataset, train_size = train
+    num_train_steps = ceil(train_size / args.batch_size)
+
+    valid_dataset, valid_size = valid
+    num_valid_steps = ceil(valid_size / args.batch_size)
+
+    test_dataset, test_size = test
+    num_test_steps = ceil(test_size / args.batch_size)
 
     patience = 0
 
@@ -283,13 +294,13 @@ def main():
 
         outputs = model(
             input_ids=input_ids,
-            token_type_ids=token_type_ids, 
+            token_type_ids=token_type_ids,
             attention_mask=attn_mask,
             perm_mask=perm_mask,
             target_mapping=target_map.float())
 
         loss, accuracy = compute_loss(
-            outputs=outputs, 
+            outputs=outputs,
             labels=labels,
             criterion=criterion,
             pad_idx=pad_idx)
@@ -347,13 +358,13 @@ def main():
             clip_grad_norm_(model.parameters(), max_norm)
 
     scheduler = WarmupLinearSchedule(
-        optimizer=optimizer, 
+        optimizer=optimizer,
         warmup_steps=args.warmup_steps,
         t_total=args.max_epochs)
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
-        loop = tqdm(train())
+        loop = tqdm(train_dataset(), total=num_train_steps)
         loop.set_description('{}'.format(epoch))
         model.train()
         avg_acc = []
@@ -371,7 +382,7 @@ def main():
         avg_acc = sum(avg_acc) / len(avg_acc)
         print('avg train acc: {:.4}'.format(avg_acc))
 
-        loop = tqdm(valid())
+        loop = tqdm(valid_dataset(), total=num_valid_steps)
         model.eval()
         avg_acc = []
 
@@ -386,14 +397,14 @@ def main():
                     loss=loss, acc=accuracy))
 
             avg_acc = sum(avg_acc) / len(avg_acc)
-        
+
         print('avg valid acc: {:.4}'.format(avg_acc))
 
         if avg_acc > best_avg_acc:
             best_avg_acc = avg_acc
             save_state(
-                model=model, optimizer=optimizer, 
-                avg_acc=best_avg_acc, epoch=epoch, 
+                model=model, optimizer=optimizer,
+                avg_acc=best_avg_acc, epoch=epoch,
                 step=step, path=args.model_dir)
 
         else:
@@ -401,7 +412,7 @@ def main():
             if patience == args.patience:
                 break
 
-    loop = tqdm(test())
+    loop = tqdm(test_dataset(), total=num_test_steps)
     model.eval()
     avg_acc = []
 

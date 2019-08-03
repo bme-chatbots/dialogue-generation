@@ -189,7 +189,7 @@ def save_examples(args, data_path, tokenizer):
         }
 
         torch.save(dataset, filename)
-        num_examples += len(examples)
+        num_examples += len(indices)
 
     return filenames, num_examples
 
@@ -296,8 +296,7 @@ def read_file(data_path):
             yield [ex['text'] for ex in dialogue]
 
 
-def create_loader(args, filenames, num_examples,
-                  tokenizer, shuffle=False):
+def create_loader(args, filenames, tokenizer, shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
@@ -415,7 +414,7 @@ class BucketSampler(Sampler):
 
         self.sorted = sorted(
             range(len(data_source)),
-            key=lambda i: data_source[2])
+            key=lambda i: data_source[i][2])
 
     def __iter__(self):
         for idx in range(
@@ -489,23 +488,24 @@ def create_dataset(args, device):
         tokenizer = XLNetTokenizer.from_pretrained(
             args.data_dir)
 
-    train = create_loader(
+    train_dataset = create_loader(
         args=args, 
         filenames=train_files,
-        num_examples=train_size, 
         tokenizer=tokenizer,
         shuffle=True)
 
-    valid = create_loader(
+    valid_dataset = create_loader(
         args=args,
         filenames=valid_files,
-        num_examples=valid_size,
         tokenizer=tokenizer)
 
-    test = create_loader(
+    test_dataset = create_loader(
         args=args,
         filenames=test_files,
-        num_examples=test_size,
         tokenizer=tokenizer)
+
+    train = train_dataset, train_size
+    valid = valid_dataset, valid_size
+    test = test_dataset, test_size
 
     return (train, valid, test), tokenizer
