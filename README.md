@@ -27,7 +27,7 @@ Training the model is fast and easy on Google Colaboratory, which can be done fr
 Copy and run the following code in a cell of your colab file for installing and training the model.
 
 ```bash
-!git clone https://github.com/Mrpatekful/dialogue-generation.git
+!git clone https://github.com/bme-chatbots/dialogue-generation.git
 !python -m pip install --upgrade pip
 
 # installing apex
