@@ -43,7 +43,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim import SGD
 
 from pytorch_transformers import (
-    WarmupLinearSchedule)
+    WarmupLinearSchedule, AdamW)
 
 from os.path import (
     exists, join,
@@ -74,7 +74,7 @@ def setup_train_args():
     parser.add_argument(
         '--learning_rate',
         type=float,
-        default=1e-3,
+        default=1e-2,
         help='Learning rate for the model.')
     parser.add_argument(
         '--batch_size',
@@ -167,9 +167,11 @@ def create_optimizer(args, parameters):
     Creates an adam or swats optimizer with cyclical 
     learning rate.
     """
-    optimizer = SGD(
-        lr=args.learning_rate, params=parameters,
-        weight_decay=1e-6, nesterov=True, momentum=0.9)
+    # optimizer = SGD(
+    #     lr=args.learning_rate, params=parameters,
+    #     weight_decay=1e-6, nesterov=True, momentum=0.9)
+
+    optimizer = AdamW(params=parameters, weight_decay=1e-6)
 
     return optimizer
 
@@ -206,7 +208,7 @@ def create_criterion(pad_idx, vocab_size, device,
     return label_smoothing
 
 
-def compute_loss(outputs, labels, criterion):
+def compute_loss(outputs, labels, pad_idx, criterion):
     """
     Computes the loss and accuracy with masking.
     """
@@ -217,7 +219,8 @@ def compute_loss(outputs, labels, criterion):
     scores_view = scores.view(-1, scores.size(-1))
     labels_view = labels.view(-1)
 
-    loss = criterion(scores_view, labels_view)
+    loss = cross_entropy(
+        scores_view, labels_view, ignore_index=pad_idx)
 
     _, preds = scores_view.max(dim=-1)
 
@@ -309,6 +312,7 @@ def main():
         loss, accuracy = compute_loss(
             outputs=outputs,
             labels=labels,
+            pad_idx=pad_idx,
             criterion=criterion)
 
         return loss, accuracy
@@ -322,7 +326,7 @@ def main():
         loss, accuracy = forward_step(batch)
 
         if torch.isnan(loss).item():
-            print('skipping step (nan loss)')
+            print('skipping step (nan)')
             # returning None values when a NaN loss
             # is encountered and skipping backprop
             # so model grads will not be corrupted
@@ -376,16 +380,25 @@ def main():
         avg_acc = []
 
         for batch in loop:
-            loss, accuracy = train_step(batch)
+            try:
+                loss, accuracy = train_step(batch)
 
-            avg_acc.append(accuracy)
+                avg_acc.append(accuracy)
 
-            loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss, acc=accuracy))
+                loop.set_postfix(ordered_dict=OrderedDict(
+                    loss=loss, acc=accuracy))
 
-            scheduler.step(epoch=step)
+                scheduler.step(epoch=step)
 
-        avg_acc = sum(avg_acc) / len(avg_acc)
+            except RuntimeError as e:
+                if 'out of memory' in str(e):
+                    print('skipping step (oom)')
+
+        if len(avg_acc) > 0:
+            avg_acc = sum(avg_acc) / len(avg_acc)
+        else:
+            avg_acc = 0.0
+
         print('avg train acc: {:.4}'.format(avg_acc))
 
         loop = tqdm(valid_dataset(), total=num_valid_steps)
