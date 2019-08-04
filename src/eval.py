@@ -189,7 +189,8 @@ def main():
         join(args.model_dir, 'model.pt'),
         map_location=device)
 
-    _, tokenizer = create_dataset(args, device)
+    _, tokenizer = create_dataset(
+        args, device, distributed=False)
 
     vocab_size = len(tokenizer)
 

@@ -301,7 +301,7 @@ def read_file(data_path):
 
 
 def create_loader(args, filenames, tokenizer,
-                  shuffle=False):
+                  distributed, shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
@@ -313,7 +313,7 @@ def create_loader(args, filenames, tokenizer,
     # distributed training is used if the local
     # rank is not the default -1
     sampler_cls = DistributedSampler if \
-        args.local_rank != -1 else IndexSampler
+        distributed else IndexSampler
     
     bucket_sampler_cls = create_sampler_cls(
             sampler_cls=sampler_cls)
@@ -467,7 +467,7 @@ def create_sampler_cls(sampler_cls):
     return BucketSampler
 
 
-def create_dataset(args, device):
+def create_dataset(args, device, distributed):
     """
     Downloads the DailyDialog dataset, converts it
     to tokens and returns iterators over the train and
@@ -527,16 +527,19 @@ def create_dataset(args, device):
         args=args,
         filenames=train_files,
         tokenizer=tokenizer,
+        distributed=distributed,
         shuffle=True)
 
     valid_dataset = create_loader(
         args=args,
         filenames=valid_files,
+        distributed=distributed,
         tokenizer=tokenizer)
 
     test_dataset = create_loader(
         args=args,
         filenames=test_files,
+        distributed=distributed,
         tokenizer=tokenizer)
 
     train = train_dataset, train_size

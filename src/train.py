@@ -227,7 +227,8 @@ def main():
     # creating dataset and storing dataset splits
     # as individual variables for convenience
     datasets, tokenizer = create_dataset(
-        args=args, device=device)
+        args=args, device=device,
+        distributed=distributed)
 
     vocab_size = len(tokenizer)
 

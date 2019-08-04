@@ -45,4 +45,4 @@ Copy and run the following code in a cell of your colab file for installing and 
 
 ## Results
 
-These results are obtained from a model with the eval run mode `run.sh "eval" "<data_dir>" "<model_dir>"`, which was trained with the default parameters. These input dialogs are not present in the training data.
+**Coming soon**
