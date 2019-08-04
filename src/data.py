@@ -21,7 +21,6 @@ from itertools import (
     zip_longest, chain)
 
 from math import ceil
-
 from copy import deepcopy
 
 from os.path import (
@@ -32,6 +31,9 @@ from os.path import (
 from torch.utils.data import (
     Dataset, DataLoader,
     Sampler)
+
+from torch.utils.data.distributed import (
+    DistributedSampler)
 
 from pytorch_transformers import (
     XLNetTokenizer)
@@ -132,9 +134,9 @@ def transform(args, tokenizer):
     return train, valid, test
 
 
-def grouper(iterable, group_size, fillvalue=None):
+def group_elements(iterable, group_size, fillvalue=None):
     """
-    Collect data into fixed-length chunks or blocks
+    Collect data into fixed-length chunks.
     """
     groups = [iter(iterable)] * group_size
 
@@ -163,7 +165,7 @@ def save_examples(args, data_path, tokenizer):
     dialogues = generate_indices(
         dialogues=dialogues)
 
-    groups = grouper(
+    groups = group_elements(
         iterable=dialogues,
         group_size=args.file_size)
 
@@ -207,10 +209,10 @@ def transform_history(history, sos_id, sp1_id, sp2_id):
     # easier to assign the speaker id
     for idx, utr in enumerate(history[::-1]):
         type_id = sp2_id if idx % 2 == 0 else sp1_id
-        
+
         # adding type id to the beginning of each utr
         ids = [type_id] + utr
-        
+
         input_ids.append(ids)
         token_type_ids.append([type_id] * len(ids))
 
@@ -242,7 +244,8 @@ def generate_examples(dialogues, special_ids):
         # adding special ids between segments and merging
         # dialogue history into a single sequence
         input_ids, token_type_ids = transform_history(
-            history, sos_id, sp1_id, sp2_id)
+            history=history, sos_id=sos_id,
+            sp1_id=sp1_id, sp2_id=sp2_id)
 
         yield (input_ids, token_type_ids, target), indices
 
@@ -256,7 +259,8 @@ def generate_dialogues(args, data_path, tokenizer):
 
         for end_idx in range(1, len(encoded)):
             begin_idx = max(end_idx - args.max_history, 0)
-            history = [ids for ids in encoded[begin_idx:end_idx]]
+            history = [ids for ids in
+                       encoded[begin_idx:end_idx]]
             target = encoded[end_idx]
 
             eos_id = tokenizer.convert_tokens_to_ids([
@@ -272,7 +276,7 @@ def generate_indices(dialogues):
     """
     for idx, (history, target) in enumerate(dialogues):
         # storing the length of the dialogues for
-        # the bucket iterator
+        # as well the bucket iterator
         indices = [
             (idx, target_idx,
                 sum(len(s) for s in history) +
@@ -296,7 +300,8 @@ def read_file(data_path):
             yield [ex['text'] for ex in dialogue]
 
 
-def create_loader(args, filenames, tokenizer, shuffle=False):
+def create_loader(args, filenames, tokenizer,
+                  shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
@@ -305,7 +310,15 @@ def create_loader(args, filenames, tokenizer, shuffle=False):
         tokenizer.mask_token, SP1
     ])
 
-    def loader():
+    # distributed training is used if the local
+    # rank is not the default -1
+    sampler_cls = DistributedSampler if \
+        args.local_rank != -1 else IndexSampler
+    
+    bucket_sampler_cls = create_sampler_cls(
+            sampler_cls=sampler_cls)
+
+    def load_examples():
         """
         Generator that loads examples from files
         lazily.
@@ -316,26 +329,23 @@ def create_loader(args, filenames, tokenizer, shuffle=False):
             collate_fn=lambda x: x[0])
 
         for examples, indices in file_loader:
-            sampler = BucketSampler(
+            sampler = bucket_sampler_cls(
                 indices, shuffle=shuffle)
 
             dialog_dataset = DialogDataset(
-                examples=examples, 
-                indices=indices,
-                mask_id=mask_id,
-                sp1_id=sp1_id)
+                examples=examples, indices=indices,
+                mask_id=mask_id, sp1_id=sp1_id)
 
             example_loader = DataLoader(
                 dialog_dataset,
                 batch_size=args.batch_size,
-                num_workers=4,
-                sampler=sampler,
+                num_workers=4, sampler=sampler,
                 pin_memory=True,
                 collate_fn=padded_collate)
 
             yield from example_loader
 
-    return loader
+    return load_examples
 
 
 class FileDataset(Dataset):
@@ -365,7 +375,7 @@ class DialogDataset(Dataset):
     Fetches utterances from a list of examples.
     """
 
-    def __init__(self, examples, indices, mask_id, 
+    def __init__(self, examples, indices, mask_id,
                  sp1_id):
         self.examples = examples
         self.indices = indices
@@ -393,7 +403,7 @@ class DialogDataset(Dataset):
 
         label = target[target_idx]
 
-        # returning nested lists for convenient 
+        # returning nested lists for convenient
         # parameter passing to collate_fn
         return [input_ids, token_type_ids, [label]]
 
@@ -401,39 +411,60 @@ class DialogDataset(Dataset):
         return len(self.indices)
 
 
-class BucketSampler(Sampler):
+class IndexSampler(Sampler):
     """
-    Iterator that creates batches from similar length
-    sequences.
+    Dummy class for sampling indices in range
+    `len(data_source)`.
     """
 
-    def __init__(self, data_source, bucket_size=1000,
-                 shuffle=True):
-        self.bucket_size = bucket_size
-        self.shuffle = shuffle
-
-        self.sorted = sorted(
-            range(len(data_source)),
-            key=lambda i: data_source[i][2])
+    def __init__(self, data_source):
+        self.data_source = data_source
 
     def __iter__(self):
-        # divides the data into bucket size segments
-        # and only these segment are shuffled
-        segments = [
-            self.sorted[idx: idx + self.bucket_size] for 
-            idx in range(0, len(self.sorted), self.bucket_size)]
-
-        # selecting seqgemnts in random order
-        random.shuffle(segments)
-        for segment in segments:
-            
-            if self.shuffle:
-                random.shuffle(segment)
-
-            yield from segment
+        return iter(range(len(self.data_source)))
 
     def __len__(self):
-        return len(self.sorted)
+        return len(self.data_source)
+
+
+def create_sampler_cls(sampler_cls):
+    """
+    Creates a bucketized sampler class.
+    """
+    class BucketSampler(sampler_cls):
+        """
+        Bucketized sampler that yields exclusive groups
+        of indices based on the sequence length.
+        """
+
+        def __init__(self, data_source, bucket_size=1000,
+                     shuffle=True):
+            super().__init__(data_source)
+            self.bucket_size = bucket_size
+            self.shuffle = shuffle
+
+            self.sorted = sorted(
+                list(super().__iter__()),
+                key=lambda i: data_source[i][2])
+
+        def __iter__(self):
+            # divides the data into bucket size segments
+            # and only these segment are shuffled
+            segments = [
+                self.sorted[idx: idx + self.bucket_size]
+                for idx in range(0, len(self.sorted),
+                                 self.bucket_size)]
+
+            # selecting seqgemnts in random order
+            random.shuffle(segments)
+            for segment in segments:
+
+                if self.shuffle:
+                    random.shuffle(segment)
+
+                yield from segment
+
+    return BucketSampler
 
 
 def create_dataset(args, device):
@@ -480,7 +511,8 @@ def create_dataset(args, device):
                 shutil.rmtree(metadata_path)
 
     else:
-        print('Loading metadata from {}'.format(metadata_path))
+        print('Loading metadata from {}'.format(
+            metadata_path))
         with open(metadata_path, 'r') as fh:
             filenames = json.load(fh)
 
@@ -492,7 +524,7 @@ def create_dataset(args, device):
             args.data_dir)
 
     train_dataset = create_loader(
-        args=args, 
+        args=args,
         filenames=train_files,
         tokenizer=tokenizer,
         shuffle=True)

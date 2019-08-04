@@ -40,7 +40,8 @@ from torch.nn.functional import (
     kl_div, log_softmax)
 
 from torch.nn.utils import clip_grad_norm_
-from torch.optim import SGD
+from torch.nn.parallel import (
+    DistributedDataParallel)
 
 from pytorch_transformers import (
     WarmupLinearSchedule, AdamW)
@@ -100,6 +101,11 @@ def setup_train_args():
         default=3,
         help='Number of steps for grad accum.')
     parser.add_argument(
+        '--loss',
+        type=str,
+        default='cross_entropy',
+        help='Either `cross_entropy` or `label_smoothing`.')
+    parser.add_argument(
         '--warmup_steps',
         type=int,
         default=500,
@@ -108,7 +114,12 @@ def setup_train_args():
         '--total_steps',
         type=int,
         default=1000000,
-        help='Number of steps for warmup schedule.')
+        help='Number of total steps.')
+    parser.add_argument(
+        '--local_rank',
+        type=int,
+        default=-1,
+        help='Local rank for distributed training.')
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -164,65 +175,27 @@ def load_state(model, optimizer, path, device):
 
 def create_optimizer(args, parameters):
     """
-    Creates an adam or swats optimizer with cyclical 
-    learning rate.
+    Creates an adam optimizer.
     """
-    # optimizer = SGD(
-    #     lr=args.learning_rate, params=parameters,
-    #     weight_decay=1e-6, nesterov=True, momentum=0.9)
-
-    optimizer = AdamW(params=parameters, weight_decay=1e-6)
+    optimizer = AdamW(
+        lr=args.learning_rate, 
+        params=parameters, weight_decay=1e-6)
 
     return optimizer
 
 
-def create_criterion(pad_idx, vocab_size, device,
-                     smoothing=0.1):
+def compute_loss(outputs, labels):
     """
-    Creates label smoothing loss with kl-divergence for the
-    seq2seq model.
-    """
-    confidence = 1.0 - smoothing
-    # initializes the target distribution vector with
-    # smoothing value divided by the number of other
-    # valid tokens
-    smoothed = torch.full(
-        (vocab_size, ), smoothing / (vocab_size - 2))
-    smoothed = smoothed.to(device)
-    smoothed[pad_idx] = 0
-
-    def label_smoothing(outputs, targets):
-        """
-        Computes the kl-divergence between the preds and the 
-        smoothed target distribution.
-        """
-        smoothed_targets = smoothed.repeat(targets.size(0), 1)
-        smoothed_targets.scatter_(
-            1, targets.unsqueeze(1), confidence)
-        smoothed_targets.masked_fill_(
-            (targets == pad_idx).unsqueeze(1), 0)
-
-        return kl_div(outputs, smoothed_targets,
-                      reduction='batchmean')
-
-    return label_smoothing
-
-
-def compute_loss(outputs, labels, pad_idx, criterion):
-    """
-    Computes the loss and accuracy with masking.
+    Computes the loss and accuracy.
     """
     logits = outputs[0]
 
-    scores = log_softmax(logits, dim=-1)
-
-    scores_view = scores.view(-1, scores.size(-1))
+    logits_view = logits.view(-1, logits.size(-1))
     labels_view = labels.view(-1)
 
-    loss = cross_entropy(
-        scores_view, labels_view, ignore_index=pad_idx)
+    loss = cross_entropy(logits_view, labels_view)
 
-    _, preds = scores_view.max(dim=-1)
+    _, preds = logits_view.max(dim=-1)
 
     accuracy = labels_view == preds
     accuracy = accuracy.float().mean().item()
@@ -235,7 +208,21 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
-    device = torch.device('cuda' if args.cuda else 'cpu')
+    distributed = args.local_rank != -1
+    main_process = args.local_rank in [0, -1]
+
+    if distributed and args.cuda:
+        # use distributed training if local rank is given
+        # and GPU training is requested
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device('cuda', args.local_rank)
+
+        torch.distributed.init_process_group(
+            backend='nccl', init_method='env://')
+
+    else:
+        device = torch.device(
+            'cuda' if args.cuda else 'cpu')
 
     # creating dataset and storing dataset splits
     # as individual variables for convenience
@@ -251,13 +238,6 @@ def main():
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())
 
-    pad_idx = tokenizer.convert_tokens_to_ids(
-        tokenizer.pad_token)
-
-    criterion = create_criterion(
-        pad_idx=pad_idx, vocab_size=vocab_size,
-        device=device)
-
     # loading previous state of the training
     best_avg_acc, init_epoch, step = load_state(
         model=model, optimizer=optimizer,
@@ -267,17 +247,20 @@ def main():
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
-    train, valid, test = datasets
+    if distributed:
+        model = DistributedDataParallel(
+            model, device_ids=[args.local_rank], 
+            output_device=args.local_rank)
 
-    # computing the sizes of the splits
-    train_dataset, train_size = train
-    num_train_steps = ceil(train_size / args.batch_size)
+    # TODO get world size here instead of 1
+    train, valid, test = [
+        (split, ceil(size / args.batch_size / 1)) 
+        for split, size in datasets]
 
-    valid_dataset, valid_size = valid
-    num_valid_steps = ceil(valid_size / args.batch_size)
-
-    test_dataset, test_size = test
-    num_test_steps = ceil(test_size / args.batch_size)
+    # computing the sizes of the dataset splits
+    train_dataset, num_train_steps = train
+    valid_dataset, num_valid_steps = valid
+    test_dataset, num_test_steps = test
 
     patience = 0
 
@@ -311,9 +294,7 @@ def main():
 
         loss, accuracy = compute_loss(
             outputs=outputs,
-            labels=labels,
-            pad_idx=pad_idx,
-            criterion=criterion)
+            labels=labels)
 
         return loss, accuracy
 
@@ -374,7 +355,11 @@ def main():
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
-        loop = tqdm(train_dataset(), total=num_train_steps)
+        loop = tqdm(
+            train_dataset(), 
+            total=num_train_steps,
+            disable=not main_process)
+
         loop.set_description('{}'.format(epoch))
         model.train()
         avg_acc = []
@@ -399,9 +384,14 @@ def main():
         else:
             avg_acc = 0.0
 
-        print('avg train acc: {:.4}'.format(avg_acc))
+        if main_process:
+            print('avg train acc: {:.4}'.format(avg_acc))
 
-        loop = tqdm(valid_dataset(), total=num_valid_steps)
+        loop = tqdm(
+            valid_dataset(), 
+            total=num_valid_steps,
+            disable=not main_process)
+
         model.eval()
         avg_acc = []
 
@@ -413,7 +403,7 @@ def main():
                 avg_acc.append(accuracy)
 
                 loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss, acc=accuracy))
+                    loss=loss.item(), acc=accuracy))
 
             avg_acc = sum(avg_acc) / len(avg_acc)
 
@@ -423,7 +413,7 @@ def main():
             best_avg_acc = avg_acc
             save_state(
                 model=model, optimizer=optimizer,
-                avg_acc=best_avg_acc, epoch=epoch,
+                avg_acc=best_avg_acc, epoch=epoch + 1,
                 step=step, path=args.model_dir)
 
         else:
@@ -431,7 +421,11 @@ def main():
             if patience == args.patience:
                 break
 
-    loop = tqdm(test_dataset(), total=num_test_steps)
+    loop = tqdm(
+        test_dataset(), 
+        total=num_test_steps,
+        disable=not main_process)
+
     model.eval()
     avg_acc = []
 
@@ -443,7 +437,7 @@ def main():
             avg_acc.append(accuracy)
 
             loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss, acc=accuracy))
+                loss=loss.item(), acc=accuracy))
 
         avg_acc = sum(avg_acc) / len(avg_acc)
 
