@@ -67,7 +67,7 @@ def setup_data_args(parser):
     parser.add_argument(
         '--max_history',
         type=str,
-        default=4,
+        default=1,
         help='Maximum number of turns in history.')
     parser.add_argument(
         '--force_new',
