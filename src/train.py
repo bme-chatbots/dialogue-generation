@@ -101,11 +101,6 @@ def setup_train_args():
         default=3,
         help='Number of steps for grad accum.')
     parser.add_argument(
-        '--loss',
-        type=str,
-        default='cross_entropy',
-        help='Either `cross_entropy` or `label_smoothing`.')
-    parser.add_argument(
         '--warmup_steps',
         type=int,
         default=500,
@@ -209,7 +204,7 @@ def main():
     """
     args = setup_train_args()
     distributed = args.local_rank != -1
-    main_process = args.local_rank in [0, -1]
+    master_process = args.local_rank in [0, -1]
 
     if distributed and args.cuda:
         # use distributed training if local rank is given
@@ -277,6 +272,7 @@ def main():
         Applies forward pass with the given batch.
         """
         inputs, labels = batch
+        print(inputs)
 
         labels = convert_to_tensor(labels)
 
@@ -348,7 +344,10 @@ def main():
                 amp.master_params(optimizer), max_norm)
         else:
             clip_grad_norm_(model.parameters(), max_norm)
-
+    
+    # TODO scheduler initial lr is too low (0) in the
+    # first epoch, which prevents training this should be
+    # fixed
     scheduler = WarmupLinearSchedule(
         optimizer=optimizer,
         warmup_steps=args.warmup_steps,
@@ -359,7 +358,7 @@ def main():
         loop = tqdm(
             train_dataset(), 
             total=num_train_steps,
-            disable=not main_process)
+            disable=not master_process)
 
         loop.set_description('{}'.format(epoch))
         model.train()
@@ -369,11 +368,13 @@ def main():
             try:
                 loss, accuracy = train_step(batch)
 
-                avg_acc.append(accuracy)
+                if accuracy is not None:
+                    avg_acc.append(accuracy)
 
                 loop.set_postfix(ordered_dict=OrderedDict(
                     loss=loss, acc=accuracy))
 
+                # TODO this should be after the train loop
                 scheduler.step(epoch=step)
 
             except RuntimeError as e:
@@ -385,13 +386,13 @@ def main():
         else:
             avg_acc = 0.0
 
-        if main_process:
+        if master_process:
             print('avg train acc: {:.4}'.format(avg_acc))
 
         loop = tqdm(
             valid_dataset(), 
             total=num_valid_steps,
-            disable=not main_process)
+            disable=not master_process)
 
         model.eval()
         avg_acc = []
@@ -407,10 +408,12 @@ def main():
                     loss=loss.item(), acc=accuracy))
 
             avg_acc = sum(avg_acc) / len(avg_acc)
-
-        print('avg valid acc: {:.4}'.format(avg_acc))
+        
+        if master_process:
+            print('avg valid acc: {:.4}'.format(avg_acc))
 
         if avg_acc > best_avg_acc:
+            patience = 0
             best_avg_acc = avg_acc
             save_state(
                 model=model, optimizer=optimizer,
@@ -425,7 +428,7 @@ def main():
     loop = tqdm(
         test_dataset(), 
         total=num_test_steps,
-        disable=not main_process)
+        disable=not master_process)
 
     model.eval()
     avg_acc = []

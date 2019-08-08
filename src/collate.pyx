@@ -66,28 +66,96 @@ cdef batchify(
         if utr_len > max_len:
             max_len = utr_len
 
-    # inputs contains the input_ids and attention_mask
-    # inputs[0] -> input_ids inputs[1] -> attention_mask
     cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
         np.empty([btc_size, max_len], dtype=np.int32)
+    # input_ids contain the history (the source utterance as well)
+    # and the first n number of target tokens (the `labels` are
+    # the n + 1 th tokens in the target utterance) the id `6` is
+    # the mask token which will be predicted by the model and `5`
+    # is the padding token
+
+    # [
+    #  [    1, 32001, 11781, ...,   32000,    9,    35,     6],
+    #   ...
+    #  [    1, 32001,    35, ...,   32000,   39,     6,     5]
+    # ]
 
     cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
         np.empty([btc_size, max_len], dtype=np.int32)
+    # token_type_ids has the same size as input_ids and its
+    # purpose is to mark the role_id of each token in the input
+    # in this case the role is the id of the person that the
+    # utterance comes from (speaker1 or speaker2) but this is
+    # a subject to change in the near future
+
+    # [
+    #  [32001, 32001, 32001, ..., 32000, 32000, 32000, 32000],
+    #   ...
+    #  [32001, 32001, 32001, ..., 32000, 32000, 32000, 5]
+    # ]
 
     cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
         np.ones([btc_size, max_len], dtype=np.int32)
+    # attn_mask also has the same dimensions as input_ids and
+    # its purpose is to be a mask over the non-padding token ids
+    # in the input, which is used mainly for attention computation
+    # the mask is 1 at non-padding tokens and 0 at padding tokens
+
+    # [
+    #  [1, 1, 1, ..., 1, 1, 1, 1],
+    #  [1, 1, 1, ..., 1, 1, 1, 0],
+    # ]
 
     cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
         np.zeros([btc_size, max_len, max_len], dtype=np.int32)
+    # the value of this tensor at [btc_idx, i, j] marks whether
+    # the value at the i index of the sequence should attend to
+    # the value at the j index of the sequence in terms of
+    # attention computation thus it is 1 everywhere except at
+    # mask and pad token locations
+
+    # [
+    #  [
+    #   [0, 0, 0, ..., 0, 0, 0, 1],
+    #   [0, 0, 0, ..., 0, 0, 0, 1],
+    #   [0, 0, 0, ..., 0, 0, 0, 1],
+    #    ...,
+    #   [0, 0, 0, ..., 0, 0, 0, 1],
+    #   [0, 0, 0, ..., 0, 0, 0, 1],
+    #   [0, 0, 0, ..., 0, 0, 0, 1]
+    #  ],
+    #  [
+    #   [0, 0, 0, ..., 0, 0, 1, 1],
+    #   [0, 0, 0, ..., 0, 0, 1, 1],
+    #   [0, 0, 0, ..., 0, 0, 1, 1],
+    #    ...,
+    #   [0, 0, 0, ..., 0, 0, 1, 1],
+    #   [0, 0, 0, ..., 0, 0, 1, 1],
+    #   [0, 0, 0, ..., 0, 0, 1, 1]
+    #  ],
+    # ]
 
     cdef np.ndarray[np.int32_t, ndim=3] target_map = \
         np.zeros([btc_size, 1, max_len], dtype=np.int32)
+    # this tensor marks the location and order of the
+    # expected output or target location
+    # the size of the 2nd dimension of this tensor is the 
+    # number of outputs which is 1 in this case and the 
+    # 3rd dim is max_length which is 0 everywhere except
+    # at the location of the mask token
+
+    # [
+    #  [
+    #   [0, 0, 0, ..., 0, 0, 0, 1]
+    #  ],
+    #  [
+    #   [0, 0, 0, ..., 0, 0, 1, 0]
+    #  ]
+    # ]
 
     cdef Py_ssize_t utr_size, idx, diff_size, \
         diff_idx, pad_idx
 
-    # attention_mask values are according to 
-    # pytorch-transformers 1 -> UNMASKED and 0 -> MASKED
     for btc_idx in range(btc_size):
         utr_size = input_ids[btc_idx].size()
         diff_size = max_len - utr_size
@@ -95,7 +163,6 @@ cdef batchify(
         target_map[btc_idx, 0, utr_size - 1] = 1
 
         for idx in range(utr_size):
-            # input_id
             input_id_tensor[btc_idx, idx] = \
                 input_ids[btc_idx][idx]
             token_type_id_tensor[btc_idx, idx] = \
@@ -106,7 +173,7 @@ cdef batchify(
 
         for diff_idx in range(diff_size):
             pad_idx = utr_size + diff_idx 
-            # 6 is the hard coded pad idx
+            # 5 is the hard coded pad idx
             input_id_tensor[btc_idx, pad_idx] = 5
             token_type_id_tensor[btc_idx, pad_idx] = 5
             attn_mask[btc_idx, pad_idx] = 0

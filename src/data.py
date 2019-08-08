@@ -216,7 +216,7 @@ def transform_history(history, sos_id, sp1_id, sp2_id):
         input_ids.append(ids)
         token_type_ids.append([type_id] * len(ids))
 
-    # adding start id to the begining of the dialogue
+    # adding special ids to the dialogue history    
     input_ids = [sos_id] + \
         list(chain(*input_ids[::-1])) + [sp1_id]
     # adding the token type id of the start id as well
@@ -257,6 +257,8 @@ def generate_dialogues(args, data_path, tokenizer):
     for dialogue in tqdm(read_file(data_path)):
         encoded = [tokenizer.encode(u) for u in dialogue]
 
+        # generating `history` and `target` like
+        # [<utr1>, <utr2>, <utr3>], <utr4>
         for end_idx in range(1, len(encoded)):
             begin_idx = max(end_idx - args.max_history, 0)
             history = [ids for ids in
@@ -276,7 +278,7 @@ def generate_indices(dialogues):
     """
     for idx, (history, target) in enumerate(dialogues):
         # storing the length of the dialogues for
-        # as well the bucket iterator
+        # the bucket iterator
         indices = [
             (idx, target_idx,
                 sum(len(s) for s in history) +
@@ -414,7 +416,9 @@ class DialogDataset(Dataset):
 class IndexSampler(Sampler):
     """
     Dummy class for sampling indices in range
-    `len(data_source)`.
+    `len(data_source)`. The purpose of this class
+    is to provide the same behaviour as 
+    `DistributedSampler` in single world environment.
     """
 
     def __init__(self, data_source):
@@ -489,10 +493,12 @@ def create_dataset(args, device, distributed):
         tokenizer.add_special_tokens(
             {'sp1_token': SP1, 'sp2_token': SP2})
 
-        (train_files, train_size), \
-            (valid_files, valid_size), \
-            (test_files, test_size) = transform(
-                args, tokenizer)
+        transformed = transform(args, tokenizer)
+        train, valid, test = transformed
+
+        train_files, train_size = train
+        valid_files, valid_size = valid
+        test_files, test_size = test
 
         tokenizer.save_pretrained(args.data_dir)
 

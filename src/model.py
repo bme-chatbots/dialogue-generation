@@ -81,6 +81,9 @@ class XLNetGenerator(XLNetLMHeadModel):
     def __init__(self, config):
         super().__init__(config)
 
+        # TODO remove temporary solution that we
+        # are only using the first 2 layers of
+        # XLNet for faster testing speed
         self.transformer.layer = ModuleList([
             layer for layer 
             in self.transformer.layer[:2]
