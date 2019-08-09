@@ -72,10 +72,6 @@ def setup_data_args(parser):
         type=str,
         default=3,
         help='Maximum number of turns in history.')
-    parser.add_argument(
-        '--force_new',
-        action='store_true',
-        help='If set, the dataset is recreated even if it exists.')
 
 
 def download(args):
@@ -497,9 +493,6 @@ def create_dataset(args, device, distributed):
     """
     metadata_path = join(
         args.data_dir, 'metadata.json')
-
-    if args.force_new:
-        shutil.rmtree(metadata_path)
 
     if not exists(metadata_path):
         # if dataset does not exist then create it

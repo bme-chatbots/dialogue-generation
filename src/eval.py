@@ -19,7 +19,8 @@ from data import (
     setup_data_args,
     create_dataset,
     transform_history,
-    SP1, SP2)
+    RSP, SP1, SP2,
+    HST, SRC)
 
 from model import (
     create_model,
@@ -90,10 +91,10 @@ def decode(args, model, inputs, tokenizer, select_fn,
 
     input_ids, token_type_ids = inputs
 
-    mask_id, sp1_id, eos_id = \
+    mask_id, rsp_id, eos_id = \
         tokenizer.convert_tokens_to_ids([
             tokenizer.mask_token,
-            SP1,
+            RSP,
             tokenizer.eos_token
         ])
 
@@ -104,7 +105,7 @@ def decode(args, model, inputs, tokenizer, select_fn,
             preds + [mask_id]]
         
         curr_token_type_ids = [token_type_ids + \
-            [sp1_id] * (len(preds) + 1)]
+            [rsp_id] * (len(preds) + 1)]
 
         inputs = prepare_inputs(
             input_ids=curr_input_ids,
@@ -202,11 +203,10 @@ def main():
 
     select_fn = METHODS[args.method]
 
-    sos_id, sp1_id, sp2_id = \
-        tokenizer.convert_tokens_to_ids([
-            tokenizer.bos_token,
-            SP1, SP2
-        ])
+    special_ids = tokenizer.convert_tokens_to_ids([
+        tokenizer.bos_token,
+        SP1, SP2, HST, SRC, RSP
+    ])
 
     @torch.no_grad()
     def respond(text):
@@ -217,8 +217,7 @@ def main():
 
         inputs = transform_history(
             history[:args.max_history],
-            sos_id=sos_id, sp1_id=sp1_id,
-            sp2_id=sp2_id)
+            special_ids=special_ids)
         
         preds = decode(
             args=args, model=model,

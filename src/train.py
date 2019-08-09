@@ -272,7 +272,6 @@ def main():
         Applies forward pass with the given batch.
         """
         inputs, labels = batch
-        print(inputs)
 
         labels = convert_to_tensor(labels)
 
