@@ -43,6 +43,9 @@ from collate import padded_collate
 
 SP1 = '<sp1>'
 SP2 = '<sp2>'
+HST = '<hst>'
+SRC = '<src>'
+RSP = '<rsp>'
 
 
 def setup_data_args(parser):
@@ -67,7 +70,7 @@ def setup_data_args(parser):
     parser.add_argument(
         '--max_history',
         type=str,
-        default=1,
+        default=3,
         help='Maximum number of turns in history.')
     parser.add_argument(
         '--force_new',
@@ -152,16 +155,21 @@ def save_examples(args, data_path, tokenizer):
 
     special_ids = tokenizer.convert_tokens_to_ids([
         tokenizer.bos_token,
-        SP1, SP2
+        SP1, SP2, HST, SRC, RSP
     ])
 
+    # during data preprocessing the history and target
+    # utterances are saved only once
     dialogues = generate_dialogues(
         args=args,
         data_path=data_path,
         tokenizer=tokenizer)
 
-    # adding lookup indices to source and target
-    # pairs for more efficient storage
+    # indices are used to select a random state from the 
+    # dialogue during training e.g. the next predicted token
+    # is the 5th target token where the previous (4) 
+    # target tokens are appended to the input tensor
+    # and are considered as previously decoded by the model
     dialogues = generate_indices(
         dialogues=dialogues)
 
@@ -196,7 +204,7 @@ def save_examples(args, data_path, tokenizer):
     return filenames, num_examples
 
 
-def transform_history(history, sos_id, sp1_id, sp2_id):
+def transform_history(history, special_ids):
     """
     Merges a list of history sentences into a single
     source example with tpye ids and also produces
@@ -204,16 +212,25 @@ def transform_history(history, sos_id, sp1_id, sp2_id):
     """
     input_ids, token_type_ids = [], []
 
+    sos_id, sp1_id, sp2_id, hst_id, \
+        src_id, rsp_id = special_ids
+
     # iterating on reversed history because the last
     # utterance is always from speaker2 thus it is
     # easier to assign the speaker id
     for idx, utr in enumerate(history[::-1]):
-        type_id = sp2_id if idx % 2 == 0 else sp1_id
+        role_id = sp2_id if idx % 2 == 0 else sp1_id
 
         # adding type id to the beginning of each utr
-        ids = [type_id] + utr
+        ids = [role_id] + utr
 
         input_ids.append(ids)
+
+        # the first element of the history is the
+        # source utterance which gets a different
+        # role token than the other parts of history
+        type_id = src_id if idx == 0 else hst_id
+
         token_type_ids.append([type_id] * len(ids))
 
     # adding special ids to the dialogue history    
@@ -222,7 +239,7 @@ def transform_history(history, sos_id, sp1_id, sp2_id):
     # adding the token type id of the start id as well
     token_type_ids = [type_id] + \
         list(chain(*token_type_ids[::-1])) + \
-        [sp1_id]
+        [rsp_id]
 
     return input_ids, token_type_ids
 
@@ -231,21 +248,22 @@ def generate_examples(dialogues, special_ids):
     """
     Generates id examples from dialogues.
     """
-    sos_id, sp1_id, sp2_id = special_ids
-
     for example in dialogues:
         if example is None:
             # reaching the last segment of the last
             # file so we can break from the loop
             break
-
+                
+        # history consist of all the dialogue sentences
+        # between the two speakers and target contains
+        # the utterance which is the speaker1's response
+        # to speaker2's last utterance
         (history, target), indices = example
 
         # adding special ids between segments and merging
         # dialogue history into a single sequence
         input_ids, token_type_ids = transform_history(
-            history=history, sos_id=sos_id,
-            sp1_id=sp1_id, sp2_id=sp2_id)
+            history=history, special_ids=special_ids)
 
         yield (input_ids, token_type_ids, target), indices
 
@@ -308,8 +326,8 @@ def create_loader(args, filenames, tokenizer,
     Creates a generator that iterates through the
     dataset.
     """
-    mask_id, sp1_id = tokenizer.convert_tokens_to_ids([
-        tokenizer.mask_token, SP1
+    mask_id, rsp_id = tokenizer.convert_tokens_to_ids([
+        tokenizer.mask_token, RSP
     ])
 
     # distributed training is used if the local
@@ -336,7 +354,7 @@ def create_loader(args, filenames, tokenizer,
 
             dialog_dataset = DialogDataset(
                 examples=examples, indices=indices,
-                mask_id=mask_id, sp1_id=sp1_id)
+                mask_id=mask_id, rsp_id=rsp_id)
 
             example_loader = DataLoader(
                 dialog_dataset,
@@ -378,11 +396,11 @@ class DialogDataset(Dataset):
     """
 
     def __init__(self, examples, indices, mask_id,
-                 sp1_id):
+                 rsp_id):
         self.examples = examples
         self.indices = indices
         self.mask_id = mask_id
-        self.sp1_id = sp1_id
+        self.rsp_id = rsp_id
 
     def __getitem__(self, idx):
         example_idx, target_idx, _ = self.indices[idx]
@@ -401,7 +419,7 @@ class DialogDataset(Dataset):
         # the token types are extended with the
         # type ids of the previous extension
         token_type_ids.extend(
-            [self.sp1_id] * (len(curr_target) + 1))
+            [self.rsp_id] * (len(curr_target) + 1))
 
         label = target[target_idx]
 
@@ -490,8 +508,12 @@ def create_dataset(args, device, distributed):
 
         tokenizer = XLNetTokenizer.from_pretrained(
             'xlnet-base-cased')
-        tokenizer.add_special_tokens(
-            {'sp1_token': SP1, 'sp2_token': SP2})
+
+        tokenizer.add_special_tokens({
+            'sp1_token': SP1, 'sp2_token': SP2,
+            'hst_token': HST, 'src_token': SRC,
+            'rsp_token': RSP
+        })
 
         transformed = transform(args, tokenizer)
         train, valid, test = transformed

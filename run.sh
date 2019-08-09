@@ -1,7 +1,7 @@
 #!/bin/bash
 
 RUN_MODE=${1:-"train"}
-DATA_DIR=${2:-~/data/nlp/dialog}
+DATA_DIR=${2:-~/data/text/dialog}
 DOWNLOAD_DIR=${3:-$DATA_DIR}
 MODEL_DIR=$(dirname "$0")/model
 
