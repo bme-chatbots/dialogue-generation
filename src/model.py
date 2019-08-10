@@ -86,7 +86,7 @@ class XLNetGenerator(XLNetLMHeadModel):
         # XLNet for faster testing speed
         self.transformer.layer = ModuleList([
             layer for layer 
-            in self.transformer.layer[:4]
+            in self.transformer.layer[:2]
         ])
 
         self.lm_loss = Linear(

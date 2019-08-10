@@ -44,7 +44,7 @@ from collate import padded_collate
 SP1 = '<sp1>'
 SP2 = '<sp2>'
 HST = '<hst>'
-SRC = '<src>'
+SRC = '<src>' # unused currently
 RSP = '<rsp>'
 
 
@@ -225,7 +225,10 @@ def transform_history(history, special_ids):
         # the first element of the history is the
         # source utterance which gets a different
         # role token than the other parts of history
-        type_id = src_id if idx == 0 else hst_id
+
+        # NOTE only using hst and rsp types currently
+        # type_id = src_id if idx == 0 else hst_id
+        type_id = hst_id
 
         token_type_ids.append([type_id] * len(ids))
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 RUN_MODE=${1:-"train"}
-DATA_DIR=${2:-~/data/text/dialog}
+DATA_DIR=${2:-$(dirname "$0")/data}
 DOWNLOAD_DIR=${3:-$DATA_DIR}
 MODEL_DIR=$(dirname "$0")/model
 

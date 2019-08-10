@@ -13,6 +13,7 @@
 
 import torch
 import argparse
+import logging
 import os
 
 from model import (
@@ -59,7 +60,7 @@ def setup_train_args():
     parser.add_argument(
         '--max_epochs',
         type=int,
-        default=1000,
+        default=15,
         help='Maximum number of epochs for training.')
     parser.add_argument(
         '--cuda',
@@ -80,12 +81,12 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=64,
+        default=32,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
         type=int,
-        default=10,
+        default=5,
         help='Number of patience epochs before termination.')
     parser.add_argument(
         '--model_dir',
@@ -98,12 +99,12 @@ def setup_train_args():
     parser.add_argument(
         '--grad_accum_steps',
         type=int,
-        default=3,
+        default=4,
         help='Number of steps for grad accum.')
     parser.add_argument(
         '--warmup_steps',
         type=int,
-        default=500,
+        default=3,
         help='Number of steps for warmup schedule.')
     parser.add_argument(
         '--total_steps',
@@ -123,7 +124,7 @@ def setup_train_args():
 
 
 def save_state(model, optimizer, avg_acc, epoch, step,
-               path):
+               logger, path):
     """
     Saves the model and optimizer state.
     """
@@ -135,7 +136,7 @@ def save_state(model, optimizer, avg_acc, epoch, step,
         'epoch': epoch,
         'step': step
     }
-    print('Saving model to {}'.format(model_path))
+    logger.info('Saving model to {}'.format(model_path))
     # making sure the model saving is not left in a
     # corrupted state after a keyboard interrupt
     while True:
@@ -146,7 +147,7 @@ def save_state(model, optimizer, avg_acc, epoch, step,
             pass
 
 
-def load_state(model, optimizer, path, device):
+def load_state(model, optimizer, path, logger, device):
     """
     Loads the model and optimizer state.
     """
@@ -157,7 +158,8 @@ def load_state(model, optimizer, path, device):
 
         model.load_state_dict(state_dict['model'])
         optimizer.load_state_dict(state_dict['optimizer'])
-        print('Loading model from {}'.format(model_path))
+        logger.info(
+            'Loading model from {}'.format(model_path))
         return (
             state_dict['avg_acc'],
             state_dict['epoch'],
@@ -166,6 +168,36 @@ def load_state(model, optimizer, path, device):
 
     except FileNotFoundError:
         return 0, 0, 0
+
+
+def create_logger(args):
+    """
+    Creates a logger that outputs information to a
+    file and the standard output as well.
+    """
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s')
+
+    # setting up logging to the console
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # setting up logging to a file
+    filename = '{date}.log'.format(
+        date=datetime.today().strftime(
+            '%m-%d-%H-%M'))
+
+    log_path = join(args.model_dir, filename)
+    file_handler = logging.FileHandler(
+        filename=log_path)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    return logger
 
 
 def create_optimizer(args, parameters):
@@ -206,6 +238,8 @@ def main():
     distributed = args.local_rank != -1
     master_process = args.local_rank in [0, -1]
 
+    logger = create_logger(args)
+
     if distributed and args.cuda:
         # use distributed training if local rank is given
         # and GPU training is requested
@@ -237,7 +271,8 @@ def main():
     # loading previous state of the training
     best_avg_acc, init_epoch, step = load_state(
         model=model, optimizer=optimizer,
-        path=args.model_dir, device=device)
+        path=args.model_dir, logger=logger,
+        device=device)
 
     if args.mixed and args.cuda:
         model, optimizer = amp.initialize(
@@ -303,7 +338,7 @@ def main():
         loss, accuracy = forward_step(batch)
 
         if torch.isnan(loss).item():
-            print('skipping step (nan)')
+            logger.warn('skipping step (nan)')
             # returning None values when a NaN loss
             # is encountered and skipping backprop
             # so model grads will not be corrupted
@@ -344,13 +379,17 @@ def main():
         else:
             clip_grad_norm_(model.parameters(), max_norm)
     
-    # TODO scheduler initial lr is too low (0) in the
-    # first epoch, which prevents training this should be
-    # fixed
     scheduler = WarmupLinearSchedule(
         optimizer=optimizer,
         warmup_steps=args.warmup_steps,
         t_total=args.total_steps)
+    
+    if master_process:
+        logger.info(str(vars(args)))
+
+    # stepping optimizer from initial (0) learning rate
+    if init_epoch == 0:
+        scheduler.step()
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
@@ -373,12 +412,11 @@ def main():
                 loop.set_postfix(ordered_dict=OrderedDict(
                     loss=loss, acc=accuracy))
 
-                # TODO this should be after the train loop
-                scheduler.step(epoch=step)
-
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    print('skipping step (oom)')
+                    logger.warn('skipping step (oom)')
+
+        scheduler.step(epoch=epoch)
 
         if len(avg_acc) > 0:
             avg_acc = sum(avg_acc) / len(avg_acc)
@@ -386,7 +424,7 @@ def main():
             avg_acc = 0.0
 
         if master_process:
-            print('avg train acc: {:.4}'.format(avg_acc))
+            logger.info('avg train acc: {:.4}'.format(avg_acc))
 
         loop = tqdm(
             valid_dataset(), 
@@ -409,7 +447,7 @@ def main():
             avg_acc = sum(avg_acc) / len(avg_acc)
         
         if master_process:
-            print('avg valid acc: {:.4}'.format(avg_acc))
+            logger.info('avg valid acc: {:.4}'.format(avg_acc))
 
         if avg_acc > best_avg_acc:
             patience = 0
@@ -417,7 +455,8 @@ def main():
             save_state(
                 model=model, optimizer=optimizer,
                 avg_acc=best_avg_acc, epoch=epoch + 1,
-                step=step, path=args.model_dir)
+                step=step, logger=logger,
+                path=args.model_dir)
 
         else:
             patience += 1
