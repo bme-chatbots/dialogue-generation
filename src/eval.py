@@ -18,7 +18,7 @@ from os.path import join
 from data import (
     setup_data_args,
     create_dataset,
-    transform_history,
+    transform_dialog,
     RSP, SP1, SP2,
     HST, SRC)
 
@@ -204,9 +204,11 @@ def main():
     select_fn = METHODS[args.method]
 
     special_ids = tokenizer.convert_tokens_to_ids([
-        tokenizer.bos_token,
-        SP1, SP2, HST, SRC, RSP
+        SP1, SP2, tokenizer.bos_token,
+        tokenizer.eos_token, HST, RSP,
+        tokenizer.mask_token
     ])
+
 
     @torch.no_grad()
     def respond(text):
@@ -215,8 +217,9 @@ def main():
         """
         history.append(tokenizer.encode(text))
 
-        inputs = transform_history(
-            history[:args.max_history],
+        inputs = transform_dialog(
+            history[:args.max_hist],
+            generated=[],
             special_ids=special_ids)
         
         preds = decode(
