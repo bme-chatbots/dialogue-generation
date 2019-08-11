@@ -186,49 +186,6 @@ def save_examples(args, data_path, tokenizer):
     return filenames, num_examples
 
 
-def transform_history(history, special_ids):
-    """
-    Merges a list of history sentences into a single
-    source example with tpye ids and also produces
-    token type ids list.
-    """
-    input_ids, token_type_ids = [], []
-
-    sos_id, sp1_id, sp2_id, hst_id, \
-        src_id, rsp_id = special_ids
-
-    # iterating on reversed history because the last
-    # utterance is always from speaker2 thus it is
-    # easier to assign the speaker id
-    for idx, utr in enumerate(history[::-1]):
-        role_id = sp2_id if idx % 2 == 0 else sp1_id
-
-        # adding type id to the beginning of each utr
-        ids = [role_id] + utr
-
-        input_ids.append(ids)
-
-        # the first element of the history is the
-        # source utterance which gets a different
-        # role token than the other parts of history
-
-        # NOTE only using hst and rsp types currently
-        # type_id = src_id if idx == 0 else hst_id
-        type_id = hst_id
-
-        token_type_ids.append([type_id] * len(ids))
-
-    # adding special ids to the dialogue history
-    input_ids = [sos_id] + \
-        list(chain(*input_ids[::-1])) + [sp1_id]
-    # adding the token type id of the start id as well
-    token_type_ids = [type_id] + \
-        list(chain(*token_type_ids[::-1])) + \
-        [rsp_id]
-
-    return input_ids, token_type_ids
-
-
 def generate_examples(dialogues):
     """
     Generates id examples from dialogues.
