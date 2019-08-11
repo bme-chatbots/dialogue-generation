@@ -81,7 +81,7 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=32,
+        default=64,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
@@ -168,6 +168,12 @@ def load_state(model, optimizer, path, logger, device):
 
     except FileNotFoundError:
         return 0, 0, 0
+
+
+def create_record_writer(args, model, data):
+    """
+    Creates a tensorboard record writer.
+    """
 
 
 def create_logger(args):
@@ -378,18 +384,19 @@ def main():
                 amp.master_params(optimizer), max_norm)
         else:
             clip_grad_norm_(model.parameters(), max_norm)
-    
-    scheduler = WarmupLinearSchedule(
-        optimizer=optimizer,
-        warmup_steps=args.warmup_steps,
-        t_total=args.total_steps)
+
+    # TODO fix scheduling
+    # scheduler = WarmupLinearSchedule(
+    #     optimizer=optimizer,
+    #     warmup_steps=args.warmup_steps,
+    #     t_total=args.total_steps)
     
     if master_process:
         logger.info(str(vars(args)))
 
     # stepping optimizer from initial (0) learning rate
-    if init_epoch == 0:
-        scheduler.step()
+    # if init_epoch == 0:
+    #     scheduler.step()
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
@@ -416,7 +423,7 @@ def main():
                 if 'out of memory' in str(e):
                     logger.warn('skipping step (oom)')
 
-        scheduler.step(epoch=epoch)
+        # scheduler.step(epoch=epoch)
 
         if len(avg_acc) > 0:
             avg_acc = sum(avg_acc) / len(avg_acc)
@@ -452,11 +459,12 @@ def main():
         if avg_acc > best_avg_acc:
             patience = 0
             best_avg_acc = avg_acc
-            save_state(
-                model=model, optimizer=optimizer,
-                avg_acc=best_avg_acc, epoch=epoch + 1,
-                step=step, logger=logger,
-                path=args.model_dir)
+            if master_process:
+                save_state(
+                    model=model, optimizer=optimizer,
+                    avg_acc=best_avg_acc, epoch=epoch + 1,
+                    step=step, logger=logger,
+                    path=args.model_dir)
 
         else:
             patience += 1

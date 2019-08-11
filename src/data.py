@@ -44,7 +44,7 @@ from collate import padded_collate
 SP1 = '<sp1>'
 SP2 = '<sp2>'
 HST = '<hst>'
-SRC = '<src>' # unused currently
+SRC = '<src>'  # unused currently
 RSP = '<rsp>'
 
 
@@ -149,25 +149,12 @@ def save_examples(args, data_path, tokenizer):
     """
     name = basename(splitext(data_path)[0])
 
-    special_ids = tokenizer.convert_tokens_to_ids([
-        tokenizer.bos_token,
-        SP1, SP2, HST, SRC, RSP
-    ])
-
     # during data preprocessing the history and target
     # utterances are saved only once
     dialogues = generate_dialogues(
         args=args,
         data_path=data_path,
         tokenizer=tokenizer)
-
-    # indices are used to select a random state from the 
-    # dialogue during training e.g. the next predicted token
-    # is the 5th target token where the previous (4) 
-    # target tokens are appended to the input tensor
-    # and are considered as previously decoded by the model
-    dialogues = generate_indices(
-        dialogues=dialogues)
 
     groups = group_elements(
         iterable=dialogues,
@@ -184,8 +171,7 @@ def save_examples(args, data_path, tokenizer):
 
         examples, indices = zip(
             *list(generate_examples(
-                dialogues=group,
-                special_ids=special_ids)))
+                dialogues=group)))
 
         indices = list(chain(*indices))
 
@@ -232,7 +218,7 @@ def transform_history(history, special_ids):
 
         token_type_ids.append([type_id] * len(ids))
 
-    # adding special ids to the dialogue history    
+    # adding special ids to the dialogue history
     input_ids = [sos_id] + \
         list(chain(*input_ids[::-1])) + [sp1_id]
     # adding the token type id of the start id as well
@@ -243,7 +229,7 @@ def transform_history(history, special_ids):
     return input_ids, token_type_ids
 
 
-def generate_examples(dialogues, special_ids):
+def generate_examples(dialogues):
     """
     Generates id examples from dialogues.
     """
@@ -252,59 +238,47 @@ def generate_examples(dialogues, special_ids):
             # reaching the last segment of the last
             # file so we can break from the loop
             break
-                
-        # history consist of all the dialogue sentences
-        # between the two speakers and target contains
-        # the utterance which is the speaker1's response
-        # to speaker2's last utterance
-        (history, target), indices = example
 
-        # adding special ids between segments and merging
-        # dialogue history into a single sequence
-        input_ids, token_type_ids = transform_history(
-            history=history, special_ids=special_ids)
+        dialogue, indices = example
 
-        yield (input_ids, token_type_ids, target), indices
+        yield dialogue, indices
 
 
 def generate_dialogues(args, data_path, tokenizer):
     """
     Generates dialogues from the raw dailydialog file.
     """
-    for dialogue in tqdm(read_file(data_path)):
-        encoded = [tokenizer.encode(u) for u in dialogue]
+    for dialogue_idx, dialogue in tqdm(
+            enumerate(read_file(data_path))):
+        dialogue = [tokenizer.encode(u) for u in dialogue]
+        dialogue_indices = list(range(len(dialogue)))
 
-        # generating `history` and `target` like
-        # [<utr1>, <utr2>, <utr3>], <utr4>
-        for end_idx in range(1, len(encoded)):
-            begin_idx = max(end_idx - args.max_history, 0)
-            history = [ids for ids in
-                       encoded[begin_idx:end_idx]]
-            target = encoded[end_idx]
+        # generating indices list that indexes into
+        # the dialogue and creates a history and a target
+        # this way the text data only has to be stored once
+        indices = []
 
-            eos_id = tokenizer.convert_tokens_to_ids([
-                tokenizer.eos_token])[0]
-            target.append(eos_id)
+        for end_idx in range(1, len(dialogue)):
+            history_indices = \
+                dialogue_indices[:end_idx][-args.max_history:]
 
-            yield history, target
+            target_utterance = dialogue[end_idx]
+            for begin_idx in history_indices:
+                for label_idx in range(len(target_utterance)):
+                    # adding 1 to lengths because role_id will
+                    # be appended to every utterance in the
+                    # `transform_history` function
+                    size = sum(
+                        len(dialogue[i]) + 1 for i
+                        in history_indices) + \
+                        label_idx + 1
 
+                    indices.append((
+                        dialogue_idx,
+                        begin_idx, end_idx,
+                        label_idx, size))
 
-def generate_indices(dialogues):
-    """
-    Generates input - label indices for the dialogues.
-    """
-    for idx, (history, target) in enumerate(dialogues):
-        # storing the length of the dialogues for
-        # the bucket iterator
-        indices = [
-            (idx, target_idx,
-                sum(len(s) for s in history) +
-                len(target[:target_idx]))
-            for target_idx
-            in range(1, len(target))
-        ]
-
-        yield (history, target), indices
+        yield dialogue, indices
 
 
 def read_file(data_path):
@@ -325,17 +299,19 @@ def create_loader(args, filenames, tokenizer,
     Creates a generator that iterates through the
     dataset.
     """
-    mask_id, rsp_id = tokenizer.convert_tokens_to_ids([
-        tokenizer.mask_token, RSP
+    special_ids = tokenizer.convert_tokens_to_ids([
+        SP1, SP2, tokenizer.bos_token, 
+        tokenizer.eos_token, HST, RSP,
+        tokenizer.mask_token
     ])
 
     # distributed training is used if the local
     # rank is not the default -1
     sampler_cls = DistributedSampler if \
         distributed else IndexSampler
-    
+
     bucket_sampler_cls = create_sampler_cls(
-            sampler_cls=sampler_cls)
+        sampler_cls=sampler_cls)
 
     def load_examples():
         """
@@ -347,13 +323,13 @@ def create_loader(args, filenames, tokenizer,
             file_dataset,
             collate_fn=lambda x: x[0])
 
-        for examples, indices in file_loader:
+        for dialogues, indices in file_loader:
             sampler = bucket_sampler_cls(
                 indices, shuffle=shuffle)
 
             dialog_dataset = DialogDataset(
-                examples=examples, indices=indices,
-                mask_id=mask_id, rsp_id=rsp_id)
+                dialogues=dialogues, indices=indices,
+                special_ids=special_ids)
 
             example_loader = DataLoader(
                 dialog_dataset,
@@ -394,33 +370,73 @@ class DialogDataset(Dataset):
     Fetches utterances from a list of examples.
     """
 
-    def __init__(self, examples, indices, mask_id,
-                 rsp_id):
-        self.examples = examples
+    def __init__(self, dialogues, indices, special_ids):
+        self.dialogues = dialogues
         self.indices = indices
-        self.mask_id = mask_id
-        self.rsp_id = rsp_id
 
+        self.sp1_id, self.sp2_id, self.sos_id, \
+            self.eos_id, self.hst_id, self.rsp_id, \
+            self.mask_id = special_ids
+    
     def __getitem__(self, idx):
-        example_idx, target_idx, _ = self.indices[idx]
-        input_ids, token_type_ids, target = \
-            self.examples[example_idx]
+        dialogue_idx, begin_idx, end_idx, \
+            target_idx, _ = self.indices[idx]
+        dialogue = self.dialogues[dialogue_idx]
+
+        # the whole dialogue is fetched and the
+        # `idx` element of indices array creates
+        # the example
+        history = dialogue[begin_idx:end_idx]
+        response = dialogue[end_idx]
+
+        # the model only predict a single token
+        # the rest of the response is added to the
+        # inputs as "already generated"
+        generated = response[:target_idx]
+        label = response[target_idx]
+        
+        input_ids, token_type_ids = [], []
+        # iterating on reversed history because the last
+        # utterance is always from speaker2 thus it is
+        # easier to assign the speaker id
+        for idx, utr in enumerate(history[::-1]):
+            role_id = self.sp2_id if idx % 2 == 0 \
+                else self.sp1_id
+            
+            ids = [role_id] + utr
+
+            input_ids.append(ids)
+
+            # the first element of the history is the
+            # source utterance which gets a different
+            # role token than the other parts of history
+
+            # NOTE only using hst and rsp types currently
+            # type_id = src_id if idx == 0 else hst_id
+            type_id = self.hst_id
+
+            token_type_ids.append([type_id] * len(ids))
+
+        # adding special ids to the dialogue history
+        input_ids = [self.sos_id] + \
+            list(chain(*input_ids[::-1])) + [self.sp1_id]
+        # adding the token type id of the start id as well
+        token_type_ids = [type_id] + \
+            list(chain(*token_type_ids[::-1])) + \
+            [self.rsp_id]
 
         input_ids = deepcopy(input_ids)
         token_type_ids = deepcopy(token_type_ids)
-        curr_target = target[:target_idx]
 
         # adding the first `target_idx` num of target
         # ids to inputs and the mask_id
-        input_ids.extend(curr_target)
+        input_ids.extend(generated)
         input_ids.append(self.mask_id)
 
         # the token types are extended with the
         # type ids of the previous extension
         token_type_ids.extend(
-            [self.rsp_id] * (len(curr_target) + 1))
-
-        label = target[target_idx]
+            [self.rsp_id] * (len(generated) + 1))
 
         # returning nested lists for convenient
         # parameter passing to collate_fn
@@ -456,17 +472,21 @@ def create_sampler_cls(sampler_cls):
         """
         Bucketized sampler that yields exclusive groups
         of indices based on the sequence length.
+        Similar sized examples are assigned to the same group.
         """
 
-        def __init__(self, data_source, bucket_size=1000,
+        def __init__(self, data_source, bucket_size=5000,
                      shuffle=True):
             super().__init__(data_source)
             self.bucket_size = bucket_size
             self.shuffle = shuffle
 
+            # `data_source` here is the `indices` list
+            # which contains tuples where the last element
+            # is the size of the example
             self.sorted = sorted(
                 list(super().__iter__()),
-                key=lambda i: data_source[i][2])
+                key=lambda i: data_source[i][-1])
 
         def __iter__(self):
             # divides the data into bucket size segments
