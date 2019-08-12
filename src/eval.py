@@ -209,7 +209,6 @@ def main():
         tokenizer.mask_token
     ])
 
-
     @torch.no_grad()
     def respond(text):
         """

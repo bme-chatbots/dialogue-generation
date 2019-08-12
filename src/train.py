@@ -16,6 +16,8 @@ import argparse
 import logging
 import os
 
+import numpy as np
+
 from model import (
     compute_size,
     create_model,
@@ -25,6 +27,7 @@ from data import (
     create_dataset,
     setup_data_args)
 
+from tensorboardX import SummaryWriter
 from collections import OrderedDict
 from tqdm import tqdm
 from math import ceil
@@ -123,19 +126,12 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def save_state(model, optimizer, avg_acc, epoch, step,
-               logger, path):
+def save_state(args, state, logger):
     """
     Saves the model and optimizer state.
     """
-    model_path = join(path, 'model.pt')
-    state = {
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'avg_acc': avg_acc,
-        'epoch': epoch,
-        'step': step
-    }
+    model_path = join(args.model_dir, 'model.pt')
+
     logger.info('Saving model to {}'.format(model_path))
     # making sure the model saving is not left in a
     # corrupted state after a keyboard interrupt
@@ -147,12 +143,12 @@ def save_state(model, optimizer, avg_acc, epoch, step,
             pass
 
 
-def load_state(model, optimizer, path, logger, device):
+def load_state(args, model, optimizer, logger, device):
     """
     Loads the model and optimizer state.
     """
     try:
-        model_path = join(path, 'model.pt')
+        model_path = join(args.model_dir, 'model.pt')
         state_dict = torch.load(
             model_path, map_location=device)
 
@@ -161,20 +157,32 @@ def load_state(model, optimizer, path, logger, device):
         logger.info(
             'Loading model from {}'.format(model_path))
         return (
-            state_dict['avg_acc'],
+            state_dict['avg_loss'],
             state_dict['epoch'],
             state_dict['step']
         )
 
     except FileNotFoundError:
-        return 0, 0, 0
+        return np.inf, 0, 0
+    
 
-
-def create_record_writer(args, model, data):
+def create_summary_writer(args, model, logger, device):
     """
     Creates a tensorboard record writer.
     """
+    writer = SummaryWriter(
+        logdir=args.model_dir,
+        flush_secs=20)
 
+    try:
+        writer.add_graph(model, torch.ones([2, 2]))
+
+    except Exception as e:
+        logger.warn(
+            'Failed to save model graph: {}'.format(e))
+
+    return writer
+    
 
 def create_logger(args):
     """
@@ -274,11 +282,14 @@ def main():
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())
 
+    writer = create_summary_writer(
+        args=args, model=model, 
+        logger=logger, device=device)
+
     # loading previous state of the training
-    best_avg_acc, init_epoch, step = load_state(
-        model=model, optimizer=optimizer,
-        path=args.model_dir, logger=logger,
-        device=device)
+    best_avg_loss, init_epoch, step = load_state(
+        args=args, model=model, optimizer=optimizer,
+        logger=logger, device=device)
 
     if args.mixed and args.cuda:
         model, optimizer = amp.initialize(
@@ -407,17 +418,22 @@ def main():
 
         loop.set_description('{}'.format(epoch))
         model.train()
-        avg_acc = []
+        avg_loss = []
 
         for batch in loop:
             try:
-                loss, accuracy = train_step(batch)
+                loss, acc = train_step(batch)
 
-                if accuracy is not None:
-                    avg_acc.append(accuracy)
+                # logging to tensorboard
+                if master_process:
+                    writer.add_scalar('train/loss', loss, step)
+                    writer.add_scalar('train/acc', acc, step)
+
+                if loss is not None:
+                    avg_loss.append(loss)
 
                 loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss, acc=accuracy))
+                    loss=loss, acc=acc))
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -425,13 +441,13 @@ def main():
 
         # scheduler.step(epoch=epoch)
 
-        if len(avg_acc) > 0:
-            avg_acc = sum(avg_acc) / len(avg_acc)
+        if len(avg_loss) > 0:
+            avg_loss = sum(avg_loss) / len(avg_loss)
         else:
-            avg_acc = 0.0
+            avg_loss = 0.0
 
         if master_process:
-            logger.info('avg train acc: {:.4}'.format(avg_acc))
+            logger.info('train loss: {:.4}'.format(avg_loss))
 
         loop = tqdm(
             valid_dataset(), 
@@ -439,37 +455,48 @@ def main():
             disable=not master_process)
 
         model.eval()
-        avg_acc = []
+        avg_loss = []
 
         # running validation loop
         with torch.no_grad():
             for batch in loop:
                 loss, accuracy = forward_step(batch)
 
-                avg_acc.append(accuracy)
+                avg_loss.append(loss.item())
 
                 loop.set_postfix(ordered_dict=OrderedDict(
                     loss=loss.item(), acc=accuracy))
 
-            avg_acc = sum(avg_acc) / len(avg_acc)
+            avg_loss = sum(avg_loss) / len(avg_loss)
+
+            if master_process:
+                writer.add_scalar('valid/loss', avg_loss, step)
         
         if master_process:
-            logger.info('avg valid acc: {:.4}'.format(avg_acc))
+            logger.info('valid loss: {:.4}'.format(avg_loss))
 
-        if avg_acc > best_avg_acc:
+        if avg_loss < best_avg_loss:
             patience = 0
-            best_avg_acc = avg_acc
+            best_avg_loss = avg_loss
             if master_process:
                 save_state(
-                    model=model, optimizer=optimizer,
-                    avg_acc=best_avg_acc, epoch=epoch + 1,
-                    step=step, logger=logger,
-                    path=args.model_dir)
+                    args=args,
+                    logger=logger,
+                    state={
+                        'model': model.state_dict(),
+                        'optimzier': optimizer.state_dict(),
+                        'avg_loss': avg_loss,
+                        'epoch': epoch + 1,
+                        'step': step
+                    })
 
         else:
             patience += 1
             if patience == args.patience:
+                # terminate when max patience level is hit
                 break
+
+    writer.close()
 
     loop = tqdm(
         test_dataset(), 
@@ -477,19 +504,19 @@ def main():
         disable=not master_process)
 
     model.eval()
-    avg_acc = []
+    avg_loss = []
 
     # running testing loop
     with torch.no_grad():
         for batch in loop:
             loss, accuracy = forward_step(batch)
 
-            avg_acc.append(accuracy)
+            avg_loss.append(loss.item())
 
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss.item(), acc=accuracy))
 
-        avg_acc = sum(avg_acc) / len(avg_acc)
+        avg_loss = sum(avg_loss) / len(avg_loss)
 
 
 if __name__ == '__main__':

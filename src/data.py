@@ -449,7 +449,7 @@ def create_sampler_cls(sampler_cls):
         Similar sized examples are assigned to the same group.
         """
 
-        def __init__(self, data_source, bucket_size=5000,
+        def __init__(self, data_source, bucket_size=1000,
                      shuffle=True):
             super().__init__(data_source)
             self.bucket_size = bucket_size
@@ -465,19 +465,23 @@ def create_sampler_cls(sampler_cls):
         def __iter__(self):
             # divides the data into bucket size segments
             # and only these segment are shuffled
-            segments = [
-                self.sorted[idx: idx + self.bucket_size]
-                for idx in range(0, len(self.sorted),
-                                 self.bucket_size)]
+            def generate_indices(group):
+                for idx in group:
+                    if idx is not None:
+                        yield idx
 
-            # selecting seqgemnts in random order
-            random.shuffle(segments)
-            for segment in segments:
+            groups = group_elements(
+                iterable=self.sorted, 
+                group_size=self.bucket_size)
+            
+            for group in groups:
+                indices = list(generate_indices(group))
 
                 if self.shuffle:
-                    random.shuffle(segment)
+                    indices = deepcopy(indices)
+                    random.shuffle(indices)
 
-                yield from segment
+                yield from indices
 
     return BucketSampler
 

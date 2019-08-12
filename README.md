@@ -24,7 +24,7 @@ Training the model is fast and easy on Google Colaboratory, which can be done fr
 !nvidia-smi
 ```
 
-Copy and run the following code in a cell of your colab file for installing and training the model.
+Copy and run the following code in a cell of your colab file for installing the model.
 
 ```bash
 !git clone https://github.com/bme-chatbots/dialogue-generation.git
@@ -39,8 +39,22 @@ Copy and run the following code in a cell of your colab file for installing and 
 
 # installing the required packages
 !cd dialogue-generation; pip install -r requirements.txt
+```
 
-!./dialogue-generation/run.sh "train" "."
+The training loss and accuracy is logged with TensorboardX, which can also be tracked in the colab file if the below code is run before the training cell.
+
+```bash
+%load_ext tensorboard.notebook
+```
+
+```bash
+%tensorboard --logdir "dialogue-generation/model"
+```
+
+The model can be trained then by simply running the `run.sh` script with the default parameters.
+
+```bash
+!./dialogue-generation/run.sh
 ```
 
 ## Results
