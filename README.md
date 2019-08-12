@@ -44,7 +44,7 @@ Copy and run the following code in a cell of your colab file for installing the 
 The training loss and accuracy is logged with TensorboardX, which can also be tracked in the colab file if the below code is run before the training cell.
 
 ```bash
-%load_ext tensorboard.notebook
+%load_ext tensorboard
 ```
 
 ```bash
