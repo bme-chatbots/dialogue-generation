@@ -17,47 +17,56 @@ from torch.nn.modules import (
     ModuleList)
 
 from torch.nn import (
-    Linear)
+    Linear, Parameter)
 
 from pytorch_transformers import (
-    XLNetLMHeadModel,
-    XLNetConfig,
-    XLNetModel)
+    XLNetLMHeadModel, XLNetConfig,
+    XLNetModel, GPT2Config,
+    GPT2Model)
+
+from datetime import datetime
 
 from os.path import (
-    exists, join)
+    exists, join,
+    dirname, abspath)
 
 
 def setup_model_args(parser):
     """
     Sets up the model arguments.
     """
+    parser.add_argument(
+        '--model_name',
+        type=str,
+        default='xlnet',
+        help='Name of the model.')
+    parser.add_argument(
+        '--model_dir',
+        type=str,
+        default=join(
+            abspath(dirname(__file__)),
+            '..', 'model.{}'.format(
+                datetime.today().strftime('%j%H%m'))),
+        help='Path of the model checkpoints.')
 
 
-def create_model(args, vocab_size, device):
+def create_model(model_dir, vocab_size, device):
     """
     Creates the classifier and encoder model.
     """
-    config_path = join(args.model_dir, 'config.json')
+    model_path = join(model_dir, 'pytorch_model.bin')
 
-    if not exists(config_path):
-        config = XLNetConfig.from_pretrained(
+    if not exists(model_path):
+        generator = XLNetGenerator.from_pretrained(
             'xlnet-base-cased')
 
-        generator = XLNetGenerator(config)
         generator.resize_token_embeddings(vocab_size)
+        generator.save_pretrained(model_dir)
 
-        config.save_pretrained(args.model_dir)
+    else:
+        generator = XLNetGenerator.from_pretrained(
+            model_dir)
 
-    # TODO huggingface output bias layer is bugged
-    # if the size of the embeddings is modified
-    # reloading the model with new config 
-    # fixes the problem
-    config = XLNetConfig.from_pretrained(
-        args.model_dir)
-
-    generator = XLNetGenerator(config)
-    
     generator = generator.to(device)
 
     return generator
@@ -77,20 +86,43 @@ class XLNetGenerator(XLNetLMHeadModel):
     A version of XLNetLMHead that has bias
     disabled in the projection layer.
     """
+    
+    def resize_bias(self, new_num_tokens=None):
+        """
+        Fix that also copies the weights of bias
+        in the output layer.
+        """
+        new_bias = torch.zeros(new_num_tokens)
 
-    def __init__(self, config):
-        super().__init__(config)
+        old_size = self.lm_loss.bias.size(0)
 
-        # TODO remove temporary solution that we
-        # are only using the first 4 layers of
-        # XLNet for faster testing speed
-        self.transformer.layer = ModuleList([
-            layer for layer 
-            in self.transformer.layer[:4]
-        ])
+        new_bias[:old_size] = self.lm_loss.bias
+        self.lm_loss.bias = Parameter(new_bias)
 
-        self.lm_loss = Linear(
-            config.d_model, config.n_token)
+    def resize_token_embeddings(self, new_num_tokens=None):
+        """
+        Extends the resize fn by resizing the bias layer.
+        """
+        super().resize_token_embeddings(new_num_tokens)
+        self.resize_bias(new_num_tokens)
 
-        self.apply(self.init_weights)
-        self.tie_weights()
+    def forward(self, inputs):
+        # converting the batch of inputs to torch tensor
+        device = next(self.parameters()).device
+
+        inputs = [
+            torch.as_tensor(t).to(device) 
+            for t in inputs
+        ]
+
+        input_ids, token_type_ids, attn_mask, \
+            perm_mask, target_map = inputs
+
+        outputs = super().forward(
+            input_ids=input_ids.long(),
+            token_type_ids=token_type_ids.long(),
+            attention_mask=attn_mask.float(),
+            perm_mask=perm_mask.float(),
+            target_mapping=target_map.float())
+
+        return outputs

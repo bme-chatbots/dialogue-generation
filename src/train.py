@@ -32,6 +32,7 @@ from collections import OrderedDict
 from tqdm import tqdm
 from math import ceil
 from datetime import datetime
+from statistics import mean
 
 try:
     from apex import amp
@@ -51,8 +52,7 @@ from pytorch_transformers import (
     WarmupLinearSchedule, AdamW)
 
 from os.path import (
-    exists, join,
-    dirname, abspath)
+    exists, join)
 
 
 def setup_train_args():
@@ -79,12 +79,12 @@ def setup_train_args():
     parser.add_argument(
         '--learning_rate',
         type=float,
-        default=1e-2,
+        default=1e-4,
         help='Learning rate for the model.')
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=64,
+        default=2,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
@@ -92,28 +92,15 @@ def setup_train_args():
         default=5,
         help='Number of patience epochs before termination.')
     parser.add_argument(
-        '--model_dir',
-        type=str,
-        default=join(
-            abspath(dirname(__file__)),
-            '..', 'model.{}'.format(
-                datetime.today().strftime('%j%H%m'))),
-        help='Path of the model checkpoints.')
-    parser.add_argument(
         '--grad_accum_steps',
         type=int,
-        default=4,
+        default=2,
         help='Number of steps for grad accum.')
     parser.add_argument(
-        '--warmup_steps',
+        '--eval_every_step',
         type=int,
-        default=3,
-        help='Number of steps for warmup schedule.')
-    parser.add_argument(
-        '--total_steps',
-        type=int,
-        default=1000000,
-        help='Number of total steps.')
+        default=10000,
+        help='Evaluation frequency in steps.')
     parser.add_argument(
         '--local_rank',
         type=int,
@@ -126,38 +113,23 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def save_state(args, state, logger):
-    """
-    Saves the model and optimizer state.
-    """
-    model_path = join(args.model_dir, 'model.pt')
-
-    logger.info('Saving model to {}'.format(model_path))
-    # making sure the model saving is not left in a
-    # corrupted state after a keyboard interrupt
-    while True:
-        try:
-            torch.save(state, model_path)
-            break
-        except KeyboardInterrupt:
-            pass
-
-
-def load_state(args, model, optimizer, logger, device):
+def load_state(model_dir, model, optimizer, logger, 
+               device):
     """
     Loads the model and optimizer state.
     """
     try:
-        model_path = join(args.model_dir, 'model.pt')
+        model_path = join(model_dir, 'model.pt')
         state_dict = torch.load(
             model_path, map_location=device)
 
         model.load_state_dict(state_dict['model'])
         optimizer.load_state_dict(state_dict['optimizer'])
         logger.info(
-            'Loading model from {}'.format(model_path))
+            'Loading model from {}'.format(
+                model_path))
         return (
-            state_dict['avg_loss'],
+            state_dict['val_loss'],
             state_dict['epoch'],
             state_dict['step']
         )
@@ -166,25 +138,7 @@ def load_state(args, model, optimizer, logger, device):
         return np.inf, 0, 0
     
 
-def create_summary_writer(args, model, logger, device):
-    """
-    Creates a tensorboard record writer.
-    """
-    writer = SummaryWriter(
-        logdir=args.model_dir,
-        flush_secs=20)
-
-    try:
-        writer.add_graph(model, torch.ones([2, 2]))
-
-    except Exception as e:
-        logger.warn(
-            'Failed to save model graph: {}'.format(e))
-
-    return writer
-    
-
-def create_logger(args):
+def create_logger(model_dir):
     """
     Creates a logger that outputs information to a
     file and the standard output as well.
@@ -205,7 +159,7 @@ def create_logger(args):
         date=datetime.today().strftime(
             '%m-%d-%H-%M'))
 
-    log_path = join(args.model_dir, filename)
+    log_path = join(model_dir, filename)
     file_handler = logging.FileHandler(
         filename=log_path)
     file_handler.setFormatter(formatter)
@@ -220,7 +174,8 @@ def create_optimizer(args, parameters):
     """
     optimizer = AdamW(
         lr=args.learning_rate, 
-        params=parameters, weight_decay=1e-6)
+        params=parameters, 
+        weight_decay=1e-6)
 
     return optimizer
 
@@ -252,7 +207,10 @@ def main():
     distributed = args.local_rank != -1
     master_process = args.local_rank in [0, -1]
 
-    logger = create_logger(args)
+    model_dir = join(args.model_dir, args.model_name)
+    os.makedirs(model_dir, exist_ok=True)
+
+    logger = create_logger(model_dir)
 
     if distributed and args.cuda:
         # use distributed training if local rank is given
@@ -276,20 +234,21 @@ def main():
     vocab_size = len(tokenizer)
 
     model = create_model(
-        args=args, vocab_size=vocab_size,
+        model_dir=model_dir, vocab_size=vocab_size, 
         device=device)
 
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())
 
-    writer = create_summary_writer(
-        args=args, model=model, 
-        logger=logger, device=device)
+    writer = SummaryWriter(
+        logdir=model_dir,
+        flush_secs=100)
 
     # loading previous state of the training
-    best_avg_loss, init_epoch, step = load_state(
-        args=args, model=model, optimizer=optimizer,
-        logger=logger, device=device)
+    best_val_loss, init_epoch, step = load_state(
+        model_dir=model_dir, model=model, 
+        optimizer=optimizer, logger=logger, 
+        device=device)
 
     if args.mixed and args.cuda:
         model, optimizer = amp.initialize(
@@ -312,33 +271,17 @@ def main():
 
     patience = 0
 
-    def convert_to_tensor(ids):
-        """
-        Convenience function for converting int32
-        ndarray to torch int64.
-        """
-        return torch.as_tensor(ids).long().to(device)
-
     def forward_step(batch):
         """
         Applies forward pass with the given batch.
         """
         inputs, labels = batch
 
-        labels = convert_to_tensor(labels)
+        # converting labels from ndarray
+        labels = torch.as_tensor(
+            labels).long().to(device)
 
-        # converting the batch of inputs to torch tensor
-        inputs = [convert_to_tensor(m) for m in inputs]
-
-        input_ids, token_type_ids, attn_mask, \
-            perm_mask, target_map = inputs
-
-        outputs = model(
-            input_ids=input_ids,
-            token_type_ids=token_type_ids,
-            attention_mask=attn_mask,
-            perm_mask=perm_mask,
-            target_mapping=target_map.float())
+        outputs = model(inputs)
 
         loss, accuracy = compute_loss(
             outputs=outputs,
@@ -396,18 +339,55 @@ def main():
         else:
             clip_grad_norm_(model.parameters(), max_norm)
 
-    # TODO fix scheduling
-    # scheduler = WarmupLinearSchedule(
-    #     optimizer=optimizer,
-    #     warmup_steps=args.warmup_steps,
-    #     t_total=args.total_steps)
-    
+    def evaluate():
+        """
+        Constructs a validation loader and evaluates
+        the model.
+        """
+        loop = tqdm(
+            valid_dataset(), 
+            total=num_valid_steps,
+            disable=not master_process)
+
+        model.eval()
+
+        with torch.no_grad():
+            for batch in loop:
+                loss, acc = forward_step(batch)
+
+                loop.set_postfix(ordered_dict=OrderedDict(
+                    loss=loss, acc=acc))
+
+                yield loss
+
+        model.train()
+
+    def save_state():
+        """
+        Saves the model and optimizer state.
+        """
+        model_path = join(model_dir, 'model.pt')
+
+        state = {
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'val_loss': val_loss,
+            'epoch': epoch + 1,
+            'step': step   
+        }
+
+        logger.info('Saving model to {}'.format(model_path))
+        # making sure the model saving is not left in a
+        # corrupted state after a keyboard interrupt
+        while True:
+            try:
+                torch.save(state, model_path)
+                break
+            except KeyboardInterrupt:
+                pass
+        
     if master_process:
         logger.info(str(vars(args)))
-
-    # stepping optimizer from initial (0) learning rate
-    # if init_epoch == 0:
-    #     scheduler.step()
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
@@ -417,84 +397,62 @@ def main():
             disable=not master_process)
 
         loop.set_description('{}'.format(epoch))
+
+        train_loss = []
+
         model.train()
-        avg_loss = []
 
         for batch in loop:
             try:
                 loss, acc = train_step(batch)
 
-                # logging to tensorboard
-                if master_process:
+                if master_process and loss is not None:
+                    train_loss.append(loss)
+
+                    # logging to tensorboard    
                     writer.add_scalar('train/loss', loss, step)
                     writer.add_scalar('train/acc', acc, step)
 
-                if loss is not None:
-                    avg_loss.append(loss)
-
                 loop.set_postfix(ordered_dict=OrderedDict(
                     loss=loss, acc=acc))
+
+                if not step % args.eval_every_step:
+                    val_loss = mean(evaluate())
+
+                    if master_process:
+                        logger.info('val loss: {:.4}'.format(
+                            val_loss))
+
+                        # logging to tensorboard    
+                        writer.add_scalar('val/loss', loss, step)
+                        writer.add_scalar('val/acc', acc, step)
+
+                    if val_loss < best_val_loss:
+                        patience = 0
+                        best_val_loss = val_loss
+
+                        if master_process:
+                            save_state()
+
+                    else:
+                        patience += 1
+                        if patience == args.patience:
+                            # terminate when max patience 
+                            # level is hit
+                            break
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     logger.warn('skipping step (oom)')
 
-        # scheduler.step(epoch=epoch)
-
-        if len(avg_loss) > 0:
-            avg_loss = sum(avg_loss) / len(avg_loss)
+        if len(train_loss) > 0:
+            train_loss = mean(train_loss)
         else:
-            avg_loss = 0.0
+            train_loss = 0.0
 
         if master_process:
-            logger.info('train loss: {:.4}'.format(avg_loss))
-
-        loop = tqdm(
-            valid_dataset(), 
-            total=num_valid_steps,
-            disable=not master_process)
-
-        model.eval()
-        avg_loss = []
-
-        # running validation loop
-        with torch.no_grad():
-            for batch in loop:
-                loss, accuracy = forward_step(batch)
-
-                avg_loss.append(loss.item())
-
-                loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss.item(), acc=accuracy))
-
-            avg_loss = sum(avg_loss) / len(avg_loss)
-
-            if master_process:
-                writer.add_scalar('valid/loss', avg_loss, step)
-        
-        if master_process:
-            logger.info('valid loss: {:.4}'.format(avg_loss))
-
-        if avg_loss < best_avg_loss:
-            patience = 0
-            best_avg_loss = avg_loss
-            if master_process:
-                save_state(
-                    args=args,
-                    logger=logger,
-                    state={
-                        'model': model.state_dict(),
-                        'optimzier': optimizer.state_dict(),
-                        'avg_loss': avg_loss,
-                        'epoch': epoch + 1,
-                        'step': step
-                    })
-
-        else:
-            patience += 1
-            if patience == args.patience:
-                # terminate when max patience level is hit
-                break
+            logger.info('train loss: {:.4}'.format(
+                train_loss))
 
     writer.close()
 

@@ -474,6 +474,11 @@ def create_sampler_cls(sampler_cls):
                 iterable=self.sorted, 
                 group_size=self.bucket_size)
             
+            # NOTE shuffling groups should be
+            # deterministic with regards to epoch
+            groups = list(groups)
+            random.shuffle(groups)
+            
             for group in groups:
                 indices = list(generate_indices(group))
 
@@ -509,8 +514,8 @@ def create_dataset(args, device, distributed):
             # 'src_token': SRC,
         })
 
-        transformed = transform(args, tokenizer)
-        train, valid, test = transformed
+        train, valid, test = transform(
+            args=args, tokenizer=tokenizer)
 
         train_files, train_size = train
         valid_files, valid_size = valid

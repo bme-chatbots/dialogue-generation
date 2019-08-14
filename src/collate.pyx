@@ -15,8 +15,10 @@ import cython
 
 from libcpp.vector cimport vector
 
+from libc.stdint cimport int32_t
 
-def padded_collate(vector[vector[vector[int]]] example):
+
+def xlnet_padded_collate(vector[vector[vector[int]]] example):
     """
     Collate function for merging a list of examples into
     a batch tensor.
@@ -48,7 +50,7 @@ def prepare_inputs(input_ids, token_type_ids):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.nonecheck(False)
-cdef batchify(
+cdef xlnet_batchify(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids):
     """
@@ -68,6 +70,9 @@ cdef batchify(
 
     cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
         np.empty([btc_size, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :] input_id_view = input_id_tensor
+
     # input_ids contain the history (the source utterance as well)
     # and the first n number of target tokens (the `labels` are
     # the n + 1 th tokens in the target utterance) the id `6` is
@@ -82,6 +87,9 @@ cdef batchify(
 
     cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
         np.empty([btc_size, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :] token_type_id_view = token_type_id_tensor
+
     # token_type_ids has the same size as input_ids and its
     # purpose is to mark the role_id of each token in the input
     # in this case the role is the id of the person that the
@@ -96,6 +104,9 @@ cdef batchify(
 
     cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
         np.ones([btc_size, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :] attn_mask_view = attn_mask
+
     # attn_mask also has the same dimensions as input_ids and
     # its purpose is to be a mask over the non-padding token ids
     # in the input, which is used mainly for attention computation
@@ -108,6 +119,9 @@ cdef batchify(
 
     cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
         np.zeros([btc_size, max_len, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :, :] perm_mask_view = perm_mask
+
     # the value of this tensor at [btc_idx, i, j] marks whether
     # the value at the i index of the sequence should attend to
     # the value at the j index of the sequence in terms of
@@ -137,6 +151,9 @@ cdef batchify(
 
     cdef np.ndarray[np.int32_t, ndim=3] target_map = \
         np.zeros([btc_size, 1, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :, :] target_map_view = target_map
+
     # this tensor marks the location and order of the
     # expected output or target location
     # the size of the 2nd dimension of this tensor is the 
@@ -156,30 +173,31 @@ cdef batchify(
     cdef Py_ssize_t utr_size, idx, diff_size, \
         diff_idx, pad_idx
 
-    for btc_idx in range(btc_size):
-        utr_size = input_ids[btc_idx].size()
-        diff_size = max_len - utr_size
+    with nogil:
+        for btc_idx in range(btc_size):
+            utr_size = input_ids[btc_idx].size()
+            diff_size = max_len - utr_size
 
-        target_map[btc_idx, 0, utr_size - 1] = 1
+            target_map_view[btc_idx, 0, utr_size - 1] = 1
 
-        for idx in range(utr_size):
-            input_id_tensor[btc_idx, idx] = \
-                input_ids[btc_idx][idx]
-            token_type_id_tensor[btc_idx, idx] = \
-                token_type_ids[btc_idx][idx]
-
-        for idx in range(max_len):
-            perm_mask[btc_idx, idx, utr_size - 1] = 1
-
-        for diff_idx in range(diff_size):
-            pad_idx = utr_size + diff_idx 
-            # 5 is the hard coded pad idx
-            input_id_tensor[btc_idx, pad_idx] = 5
-            token_type_id_tensor[btc_idx, pad_idx] = 5
-            attn_mask[btc_idx, pad_idx] = 0
+            for idx in range(utr_size):
+                input_id_view[btc_idx, idx] = \
+                    input_ids[btc_idx][idx]
+                token_type_id_view[btc_idx, idx] = \
+                    token_type_ids[btc_idx][idx]
 
             for idx in range(max_len):
-                perm_mask[btc_idx, idx, pad_idx] = 1
- 
+                perm_mask_view[btc_idx, idx, utr_size - 1] = 1
+
+            for diff_idx in range(diff_size):
+                pad_idx = utr_size + diff_idx 
+                # 5 is the hard coded pad idx
+                input_id_view[btc_idx, pad_idx] = 5
+                token_type_id_view[btc_idx, pad_idx] = 5
+                attn_mask_view[btc_idx, pad_idx] = 0
+
+                for idx in range(max_len):
+                    perm_mask_view[btc_idx, idx, pad_idx] = 1
+    
     return input_id_tensor, token_type_id_tensor, \
         attn_mask, perm_mask, target_map
