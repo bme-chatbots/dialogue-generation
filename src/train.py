@@ -462,19 +462,24 @@ def main():
         disable=not master_process)
 
     model.eval()
-    avg_loss = []
+
+    test_loss = []
 
     # running testing loop
     with torch.no_grad():
         for batch in loop:
             loss, accuracy = forward_step(batch)
 
-            avg_loss.append(loss.item())
+            test_loss.append(loss.item())
 
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss.item(), acc=accuracy))
 
-        avg_loss = sum(avg_loss) / len(avg_loss)
+        test_loss = mean(test_loss)
+
+        if master_process:
+            logger.info('test loss: {:.4}'.format(
+                test_loss))
 
 
 if __name__ == '__main__':
