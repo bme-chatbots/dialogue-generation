@@ -10,6 +10,7 @@
 # pylint: disable=no-member
 # pylint: disable=not-callable
 
+import os
 import torch
 import random
 
@@ -22,9 +23,10 @@ from torch.nn import (
 from pytorch_transformers import (
     XLNetLMHeadModel, XLNetConfig,
     XLNetModel, GPT2Config,
-    GPT2Model)
+    GPT2LMHeadModel)
 
 from datetime import datetime
+from collections import namedtuple
 
 from os.path import (
     exists, join,
@@ -50,21 +52,25 @@ def setup_model_args(parser):
         help='Path of the model checkpoints.')
 
 
-def create_model(model_dir, vocab_size, device):
+def create_model(args, vocab_size, device):
     """
     Creates the classifier and encoder model.
     """
+    model_dir = join(args.model_dir, args.model_name)
+    os.makedirs(model_dir, exist_ok=True)
+
     model_path = join(model_dir, 'pytorch_model.bin')
+    model_cls = MODELS[args.model_name]
 
     if not exists(model_path):
-        generator = XLNetGenerator.from_pretrained(
-            'xlnet-base-cased')
+        generator = model_cls.from_pretrained(
+            model_cls.config)
 
         generator.resize_token_embeddings(vocab_size)
         generator.save_pretrained(model_dir)
 
     else:
-        generator = XLNetGenerator.from_pretrained(
+        generator = model_cls.from_pretrained(
             model_dir)
 
     generator = generator.to(device)
@@ -83,9 +89,10 @@ def compute_size(model):
 
 class XLNetGenerator(XLNetLMHeadModel):
     """
-    A version of XLNetLMHead that has bias
-    disabled in the projection layer.
+    Generator model based on XLNet language model.
     """
+
+    config = 'xlnet-base-cased'
     
     def resize_bias(self, new_num_tokens=None):
         """
@@ -126,3 +133,35 @@ class XLNetGenerator(XLNetLMHeadModel):
             target_mapping=target_map.float())
 
         return outputs
+
+
+class GPT2Generator(GPT2LMHeadModel):
+    """
+    Generator model based on GPT2 language model.
+    """
+
+    config = 'gpt2'
+
+    def forward(self, inputs):
+        # converting the batch of inputs to torch tensor
+        device = next(self.parameters()).device
+
+        inputs = [
+            torch.as_tensor(t).to(device) 
+            for t in inputs
+        ]
+
+        input_ids, token_type_ids, attn_mask = inputs
+
+        outputs = super().forward(
+            input_ids=input_ids.long(),
+            token_type_ids=token_type_ids.long(),
+            attention_mask=attn_mask.byte())
+        
+        return outputs
+
+
+MODELS = {
+    'xlnet': XLNetGenerator, 
+    'gpt2': GPT2Generator
+}

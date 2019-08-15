@@ -74,7 +74,7 @@ def setup_train_args():
     parser.add_argument(
         '--mixed',
         type=bool,
-        default=False,
+        default=True,
         help='Use mixed precision training.')
     parser.add_argument(
         '--learning_rate',
@@ -138,11 +138,13 @@ def load_state(model_dir, model, optimizer, logger,
         return np.inf, 0, 0
     
 
-def create_logger(model_dir):
+def create_logger(args):
     """
     Creates a logger that outputs information to a
     file and the standard output as well.
     """
+    model_dir = join(args.model_dir, args.model_name)
+
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
 
@@ -204,15 +206,11 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
-    distributed = args.local_rank != -1
     master_process = args.local_rank in [0, -1]
 
     model_dir = join(args.model_dir, args.model_name)
-    os.makedirs(model_dir, exist_ok=True)
 
-    logger = create_logger(model_dir)
-
-    if distributed and args.cuda:
+    if args.local_rank != -1 and args.cuda:
         # use distributed training if local rank is given
         # and GPU training is requested
         torch.cuda.set_device(args.local_rank)
@@ -228,13 +226,16 @@ def main():
     # creating dataset and storing dataset splits
     # as individual variables for convenience
     datasets, tokenizer = create_dataset(
-        args=args, device=device,
-        distributed=distributed)
+        args=args, device=device)
 
     vocab_size = len(tokenizer)
 
+    # TODO fix xlnet nan with mixed precision
+    if args.model_name == 'xlnet':
+        args.mixed = False
+
     model = create_model(
-        model_dir=model_dir, vocab_size=vocab_size, 
+        args=args, vocab_size=vocab_size, 
         device=device)
 
     optimizer = create_optimizer(
@@ -243,6 +244,8 @@ def main():
     writer = SummaryWriter(
         logdir=model_dir,
         flush_secs=100)
+
+    logger = create_logger(args=args)
 
     # loading previous state of the training
     best_val_loss, init_epoch, step = load_state(
@@ -254,14 +257,17 @@ def main():
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
-    if distributed:
+    if args.local_rank != -1:
         model = DistributedDataParallel(
             model, device_ids=[args.local_rank], 
             output_device=args.local_rank)
 
-    # TODO get world size here instead of 1
+    world_size = 1 if not args.cuda \
+        else torch.cuda.device_count()
+
     train, valid, test = [
-        (split, ceil(size / args.batch_size / 1)) 
+        (split, ceil(
+            size / args.batch_size / world_size)) 
         for split, size in datasets]
 
     # computing the sizes of the dataset splits
@@ -339,28 +345,27 @@ def main():
         else:
             clip_grad_norm_(model.parameters(), max_norm)
 
-    def evaluate():
+    @torch.no_grad()
+    def evaluate(dataset, num_steps):
         """
         Constructs a validation loader and evaluates
         the model.
         """
         loop = tqdm(
-            valid_dataset(), 
-            total=num_valid_steps,
-            disable=not master_process)
+            dataset(), 
+            total=num_steps,
+            disable=not master_process,
+            desc='eval')
 
         model.eval()
 
-        with torch.no_grad():
-            for batch in loop:
-                loss, acc = forward_step(batch)
+        for batch in loop:
+            loss, acc = forward_step(batch)
 
-                loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss, acc=acc))
+            loop.set_postfix(ordered_dict=OrderedDict(
+                loss=loss.item(), acc=acc))
 
-                yield loss
-
-        model.train()
+            yield loss.item()
 
     def save_state():
         """
@@ -394,9 +399,8 @@ def main():
         loop = tqdm(
             train_dataset(), 
             total=num_train_steps,
-            disable=not master_process)
-
-        loop.set_description('{}'.format(epoch))
+            disable=not master_process,
+            desc='train {}'.format(epoch))
 
         train_loss = []
 
@@ -417,7 +421,12 @@ def main():
                     loss=loss, acc=acc))
 
                 if not step % args.eval_every_step:
-                    val_loss = mean(evaluate())
+                    val_loss = mean(evaluate(
+                        dataset=valid_dataset,
+                        num_steps=num_valid_steps))
+                    
+                    # switching back to training
+                    model.train()
 
                     if master_process:
                         logger.info('val loss: {:.4}'.format(
@@ -456,30 +465,13 @@ def main():
 
     writer.close()
 
-    loop = tqdm(
-        test_dataset(), 
-        total=num_test_steps,
-        disable=not master_process)
+    test_loss = mean(evaluate(
+        dataset=test_dataset,
+        num_steps=num_test_steps))
 
-    model.eval()
-
-    test_loss = []
-
-    # running testing loop
-    with torch.no_grad():
-        for batch in loop:
-            loss, accuracy = forward_step(batch)
-
-            test_loss.append(loss.item())
-
-            loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss.item(), acc=accuracy))
-
-        test_loss = mean(test_loss)
-
-        if master_process:
-            logger.info('test loss: {:.4}'.format(
-                test_loss))
+    if master_process:
+        logger.info('test loss: {:.4}'.format(
+            test_loss))
 
 
 if __name__ == '__main__':
