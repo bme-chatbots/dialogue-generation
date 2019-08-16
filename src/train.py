@@ -182,16 +182,18 @@ def create_optimizer(args, parameters):
     return optimizer
 
 
-def compute_loss(outputs, labels):
+def compute_loss(outputs, targets, ignore_idx):
     """
     Computes the loss and accuracy.
     """
     logits = outputs[0]
 
     logits_view = logits.view(-1, logits.size(-1))
-    labels_view = labels.view(-1)
+    labels_view = targets.view(-1)
 
-    loss = cross_entropy(logits_view, labels_view)
+    loss = cross_entropy(
+        logits_view, labels_view, 
+        ignore_index=ignore_idx)
 
     _, preds = logits_view.max(dim=-1)
 
@@ -228,6 +230,8 @@ def main():
     datasets, tokenizer = create_dataset(
         args=args, device=device)
 
+    pad_idx = tokenizer.convert_tokens_to_ids(
+        tokenizer.pad_token)
     vocab_size = len(tokenizer)
 
     # TODO fix xlnet nan with mixed precision
@@ -281,17 +285,21 @@ def main():
         """
         Applies forward pass with the given batch.
         """
-        inputs, labels = batch
+        inputs, targets = batch
+        print(inputs, targets)
 
-        # converting labels from ndarray
-        labels = torch.as_tensor(
-            labels).long().to(device)
+        # converting targets from ndarray
+        targets = torch.as_tensor(targets)
+        targets = targets.long().to(device)
 
-        outputs = model(inputs)
+        outputs = model(
+            inputs=inputs,
+            targets=targets)
 
         loss, accuracy = compute_loss(
-            outputs=outputs,
-            labels=labels)
+            outputs=outputs, 
+            targets=targets,
+            ignore_idx=pad_idx)
 
         return loss, accuracy
 

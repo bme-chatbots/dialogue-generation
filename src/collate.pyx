@@ -24,19 +24,19 @@ def xlnet_padded_collate(vector[vector[vector[int]]] example):
     a batch tensor.
     """
     # unzipping the examples lists
-    cdef vector[vector[int]] input_ids, token_type_ids
-    cdef vector[int] labels
+    cdef vector[vector[int]] input_ids, token_type_ids, targets
     cdef Py_ssize_t btc_idx, btc_size = example.size()
 
     for btc_idx in range(btc_size):
         input_ids.push_back(example[btc_idx][0])
         token_type_ids.push_back(example[btc_idx][1])
-        labels.push_back(example[btc_idx][2][0])
+        targets.push_back(example[btc_idx][2])
     
     # input_tensors contains the attention_mask and input_ids
-    input_tensors = xlnet_batchify(input_ids, token_type_ids)
+    input_tensors = create_xlnet_batch(input_ids, token_type_ids)
+    target_tensor = batchify(targets, -1)
 
-    return input_tensors, targets
+    return input_tensors, target_tensor
 
 
 def gpt2_padded_collate(vector[vector[vector[int]]] example):
@@ -45,19 +45,34 @@ def gpt2_padded_collate(vector[vector[vector[int]]] example):
     a batch tensor.
     """
     # unzipping the examples lists
-    cdef vector[vector[int]] input_ids, token_type_ids
-    cdef vector[int] labels
+    cdef vector[vector[int]] input_ids, token_type_ids, targets
     cdef Py_ssize_t btc_idx, btc_size = example.size()
+    cdef vector[int] target_lengths
 
     for btc_idx in range(btc_size):
         input_ids.push_back(example[btc_idx][0])
         token_type_ids.push_back(example[btc_idx][1])
-        labels.push_back(example[btc_idx][2][0])
+        targets.push_back(example[btc_idx][2])
+        target_lengths.push_back(example[btc_idx][2].size())
     
     # input_tensors contains the attention_mask and input_ids
-    input_tensors = gpt2_batchify(input_ids, token_type_ids)
+    cdef np.ndarray[np.int32_t, ndim=3] tensors = \
+        create_gpt2_train_batch(
+            input_ids, token_type_ids, target_lengths)
 
-    return input_tensors, labels
+    cdef np.ndarray[np.int32_t, ndim=3] input_tensors = \
+        tensors[:2, :, :-1]
+
+    cdef np.ndarray[np.int32_t, ndim=2] target_tensor = \
+        tensors[2, :, 1:]
+
+    return input_tensors, target_tensor
+
+
+COLLATE = {
+    'xlnet': xlnet_padded_collate,
+    'gpt2': gpt2_padded_collate
+}
 
 
 def prepare_xlnet_inputs(input_ids, token_type_ids):
@@ -65,7 +80,7 @@ def prepare_xlnet_inputs(input_ids, token_type_ids):
     Creates padded arrays from the provided inputs
     for the XLNet model during inference.
     """
-    return xlnet_batchify(input_ids, token_type_ids)
+    return create_xlnet_batch(input_ids, token_type_ids)
 
 
 def prepare_gpt2_inputs(input_ids, token_type_ids):
@@ -73,13 +88,63 @@ def prepare_gpt2_inputs(input_ids, token_type_ids):
     Creates padded arrays from the provided inputs
     for the GPT2 model during inference.
     """
-    return gpt2_batchify(input_ids, token_type_ids)
+    return create_gpt2_eval_batch(input_ids, token_type_ids)
+
+
+PERPARE = {
+    'xlnet': prepare_xlnet_inputs,
+    'gpt2': prepare_gpt2_inputs
+}
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.nonecheck(False)
-cdef xlnet_batchify(
+cdef batchify(vector[vector[int]] ids, const int32_t pad):
+    """
+    Creates a batch from a list of utterances.
+    """
+    cdef Py_ssize_t btc_size = ids.size()
+    cdef Py_ssize_t btc_idx
+    cdef vector[int] utr
+    cdef int utr_len, max_len = 0
+
+    # computing the sequence length for the batch
+    for btc_idx in range(btc_size):
+        utr = ids[btc_idx]
+        utr_len = utr.size()
+        if utr_len > max_len:
+            max_len = utr_len
+
+    cdef np.ndarray[np.int32_t, ndim=2] tensor = \
+        np.empty([btc_size, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :] tensor_view = tensor
+
+    cdef Py_ssize_t utr_size, idx, diff_size, \
+        diff_idx, pad_idx
+
+    with nogil:
+        for btc_idx in range(btc_size):
+            utr_size = ids[btc_idx].size()
+            diff_size = max_len - utr_size
+
+            for idx in range(utr_size):
+                tensor_view[btc_idx, idx] = \
+                    ids[btc_idx][idx]
+
+            for diff_idx in range(diff_size):
+                pad_idx = utr_size + diff_idx 
+                # 5 is the hard coded pad idx
+                tensor[btc_idx, pad_idx] = pad
+    
+    return tensor
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.nonecheck(False)
+cdef create_xlnet_batch(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids):
     """
@@ -235,7 +300,65 @@ cdef xlnet_batchify(
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.nonecheck(False)
-cdef gpt2_batchify(
+cdef create_gpt2_train_batch(
+        vector[vector[int]] input_ids, 
+        vector[vector[int]] token_type_ids,
+        vector[int] target_lengths):
+    """
+    Creates a batch from a list of utterances.
+    """
+    cdef Py_ssize_t btc_size = input_ids.size()
+    cdef Py_ssize_t btc_idx
+    cdef vector[int] utr
+    cdef int utr_len, max_len = 0
+
+    # computing the sequence length for the batch
+    for btc_idx in range(btc_size):
+        utr = input_ids[btc_idx]
+        utr_len = utr.size()
+        if utr_len > max_len:
+            max_len = utr_len
+
+    cdef np.ndarray[np.int32_t, ndim=3] input_tensor = \
+        np.empty([3, btc_size, max_len], dtype=np.int32)
+
+    cdef int32_t [:, :, :] input_view = input_tensor
+
+    cdef Py_ssize_t utr_size, idx, diff_size, \
+        trg_size, diff_idx, pad_idx
+
+    with nogil:
+        for btc_idx in range(btc_size):
+            utr_size = input_ids[btc_idx].size()
+            trg_size = target_lengths[btc_idx]
+            diff_size = max_len - utr_size
+
+            for idx in range(utr_size):
+                input_view[0, btc_idx, idx] = \
+                    input_ids[btc_idx][idx]
+                input_view[1, btc_idx, idx] = \
+                    token_type_ids[btc_idx][idx]
+
+                if idx < utr_size - trg_size:
+                    input_view[2, btc_idx, idx] = 50261
+                else:
+                    input_view[2, btc_idx, idx] = \
+                        input_ids[btc_idx][idx]
+
+            for diff_idx in range(diff_size):
+                pad_idx = utr_size + diff_idx 
+                # -1 is the hard coded pad idx
+                input_view[0, btc_idx, pad_idx] = 50261
+                input_view[1, btc_idx, pad_idx] = 50261
+                input_view[2, btc_idx, pad_idx] = 50261
+    
+    return input_tensor
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.nonecheck(False)
+cdef create_gpt2_eval_batch(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids):
     """
@@ -253,47 +376,13 @@ cdef gpt2_batchify(
         if utr_len > max_len:
             max_len = utr_len
 
-    cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
-        np.empty([btc_size, max_len], dtype=np.int32)
+    cdef np.ndarray[np.int32_t, ndim=3] input_tensor = \
+        np.empty([2, btc_size, max_len], dtype=np.int32)
 
-    cdef int32_t [:, :] input_id_view = input_id_tensor
-
-    # input_ids contain the history (the source utterance as well)
-    # and the first n number of target tokens (the `labels` are
-    # the n + 1 th tokens in the target utterance) the id `6` is
-    # the mask token which will be predicted by the model and `5`
-    # is the padding token
-
-    # [
-    #  [    1, 32001, 11781, ...,   32000,    9,    35,     6],
-    #   ...
-    #  [    1, 32001,    35, ...,   32000,   39,     6,     5]
-    # ]
-
-    cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
-        np.empty([btc_size, max_len], dtype=np.int32)
-
-    cdef int32_t [:, :] token_type_id_view = token_type_id_tensor
-
-    # token_type_ids has the same size as input_ids and its
-    # purpose is to mark the role_id of each token in the input
-    # in this case the role is the id of the person that the
-    # utterance comes from (speaker1 or speaker2) but this is
-    # a subject to change in the near future
-
-    # [
-    #  [32001, 32001, 32001, ..., 32000, 32000, 32000, 32000],
-    #   ...
-    #  [32001, 32001, 32001, ..., 32000, 32000, 32000, 5]
-    # ]
-
-    cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
-        np.ones([btc_size, max_len], dtype=np.int32)
-
-    cdef int32_t [:, :] attn_mask_view = attn_mask
+    cdef int32_t [:, :, :] input_view = input_tensor
 
     cdef Py_ssize_t utr_size, idx, diff_size, \
-        diff_idx, pad_idx
+        trg_size, diff_idx, pad_idx
 
     with nogil:
         for btc_idx in range(btc_size):
@@ -301,28 +390,16 @@ cdef gpt2_batchify(
             diff_size = max_len - utr_size
 
             for idx in range(utr_size):
-                input_id_view[btc_idx, idx] = \
+                input_view[0, btc_idx, idx] = \
                     input_ids[btc_idx][idx]
-                token_type_id_view[btc_idx, idx] = \
+                input_view[1, btc_idx, idx] = \
                     token_type_ids[btc_idx][idx]
 
             for diff_idx in range(diff_size):
                 pad_idx = utr_size + diff_idx 
-                # 5 is the hard coded pad idx
-                input_id_view[btc_idx, pad_idx] = 5
-                token_type_id_view[btc_idx, pad_idx] = 5
-                attn_mask_view[btc_idx, pad_idx] = 0
+                # 50261 is the hard coded pad idx for
+                # the GPT-2 model
+                input_view[0, btc_idx, pad_idx] = 50261
+                input_view[1, btc_idx, pad_idx] = 50261
     
-    return input_id_tensor, token_type_id_tensor, attn_mask
-
-
-COLLATE_FNS = {
-    'xlnet': xlnet_padded_collate,
-    'gpt2': gpt2_padded_collate
-}
-
-
-PREPARE_FNS = {
-    'xlnet': prepare_xlnet_inputs,
-    'gpt2': prepare_gpt2_inputs
-}
+    return input_tensor

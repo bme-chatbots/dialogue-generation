@@ -40,14 +40,15 @@ from pytorch_transformers import (
     XLNetTokenizer,
     GPT2Tokenizer)
 
-from collate import COLLATE_FNS
-from model import MODELS
+from collate import COLLATE
+from model import MODEL
 
 
 SP1 = '<sp1>'
 SP2 = '<sp2>'
 HST = '<hst>'
 RSP = '<rsp>'
+PAD = '<pad>'
 
 
 def setup_data_args(parser):
@@ -90,7 +91,7 @@ def group_elements(iterable, group_size):
     return zip_longest(*groups)
 
 
-def save_examples(args, data_path, tokenizer):
+def save_examples(args, data_cls, data_path, tokenizer):
     """
     Creates numericalizes examples from a raw data
     file and serializes them.
@@ -103,6 +104,7 @@ def save_examples(args, data_path, tokenizer):
     # and target utterances are saved only once
     dialogs = generate_dialogs(
         args=args,
+        data_cls=data_cls,
         data_path=data_path,
         tokenizer=tokenizer)
 
@@ -150,7 +152,7 @@ def generate_examples(dialogs):
         yield dialog, indices
 
 
-def generate_dialogs(args, data_path, tokenizer):
+def generate_dialogs(args, data_cls, data_path, tokenizer):
     """
     Generates dialogs from the raw dailydialog file.
     """
@@ -182,7 +184,9 @@ def generate_dialogs(args, data_path, tokenizer):
                 yield (dialog_idx, begin_idx,
                        end_idx, example_len)
 
-    for idx, dialog in tqdm(enumerate(read_file(data_path))):
+    content = data_cls.read_file(data_path)
+
+    for idx, dialog in tqdm(enumerate(content)):
         dialog = [tokenizer.encode(u) for u in dialog]
 
         # generating indices list that indexes into
@@ -231,18 +235,6 @@ def transform_dialog(history, special_ids):
     token_type_ids.append(rsp_id)
 
     return input_ids, token_type_ids
-
-
-def read_file(data_path):
-    """
-    Reads the contents of a raw dailydialog file.
-    """
-    with open(data_path, 'r') as fh:
-        for line in fh:
-            dialog = json.loads(
-                line.strip())['dialogue']
-
-            yield [ex['text'] for ex in dialog]
 
 
 class FileDataset(Dataset):
@@ -342,6 +334,7 @@ class DialogDataset(Dataset):
         return [
             save_examples(
                 args=args, 
+                data_cls=cls,
                 data_path=data_path, 
                 tokenizer=tokenizer)
             for data_path in files
@@ -352,12 +345,12 @@ class DialogDataset(Dataset):
         """
         Lists the available datasets.
         """
-        def generate_subclasses(subclass):
-            for c in subclass.__subclasses__():
+        def generate_subclasses(c):
+            for s in c.__subclasses__():
                 # recursively runs through the
                 # subclasses of dialog datasets
-                yield from generate_subclasses(c)
-                yield c
+                yield from generate_subclasses(s)
+                yield s
 
         # filtering out possible duplicates
         subclasses = set(generate_subclasses(cls))
@@ -370,7 +363,7 @@ class DialogDataset(Dataset):
         self.special_ids = special_ids
 
     def __getitem__(self, idx):
-        dialog_idx, begin_idx, end_idx, _ = \
+        dialog_idx, begin_idx, end_idx, seq_len = \
             self.indices[idx]
         dialog = self.dialogs[dialog_idx]
 
@@ -394,7 +387,10 @@ class DialogDataset(Dataset):
 
         # returning nested lists for convenient
         # parameter passing to collate_fn
-        return [input_ids, token_type_ids, target]
+        return [
+            input_ids, token_type_ids, 
+            target, [seq_len]
+        ]
 
     def __len__(self):
         return len(self.indices)
@@ -436,7 +432,7 @@ def create_loader(args, filenames, tokenizer,
     bucket_sampler_cls = create_sampler_cls(
         sampler_cls=sampler_cls)
 
-    collate_fn = COLLATE_FNS[args.model_name]
+    collate_fn = COLLATE[args.model_name]
 
     def load_examples():
         """
@@ -470,6 +466,12 @@ def create_loader(args, filenames, tokenizer,
     return load_examples
 
 
+TOKENIZER = {
+    'xlnet': XLNetTokenizer, 
+    'gpt2': GPT2Tokenizer
+}
+
+
 def create_tokenizer(args):
     """
     Creates the tokenizer for the model and saves
@@ -477,10 +479,10 @@ def create_tokenizer(args):
     """
     data_dir = join(args.data_dir, args.data_name,
                     args.model_name)
-    tokenizer_path = join(data_dir, 'spiece.model')
+    tokenizer_path = join(data_dir, 'special_tokens_map.json')
 
-    tokenizer_cls = TOKENIZERS[args.model_name]
-    model_cls = MODELS[args.model_name]
+    tokenizer_cls = TOKENIZER[args.model_name]
+    model_cls = MODEL[args.model_name]
 
     if not exists(tokenizer_path):
         # TODO come up with better naming
@@ -493,6 +495,12 @@ def create_tokenizer(args):
         special_tokens = [SP1, SP2, HST, RSP]
         instance.add_special_tokens({
             'additional_special_tokens': special_tokens})
+
+        if instance.pad_token is None:
+            # GPT2 does not have a pad token
+            instance.add_special_tokens({
+                'pad_token': PAD})
+
         instance.save_pretrained(data_dir)
 
     else:
@@ -657,6 +665,18 @@ class DailyDialog(DialogDataset):
 
     files = ['train.json', 'valid.json', 'test.json']
 
+    @classmethod
+    def read_file(cls, data_path):
+        """
+        Reads the contents of a raw dailydialog file.
+        """
+        with open(data_path, 'r') as fh:
+            for line in fh:
+                dialog = json.loads(
+                    line.strip())['dialogue']
+
+                yield [ex['text'] for ex in dialog]
+
 
 class PersonaChat(DialogDataset):
     """
@@ -695,9 +715,3 @@ class OpenSubtitles(DialogDataset):
     @classmethod
     def transform(cls, args, tokenizer):
         pass
-
-
-TOKENIZERS = {
-    'xlnet': XLNetTokenizer,
-    'gpt2': GPT2Tokenizer
-}

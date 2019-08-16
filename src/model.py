@@ -60,7 +60,7 @@ def create_model(args, vocab_size, device):
     os.makedirs(model_dir, exist_ok=True)
 
     model_path = join(model_dir, 'pytorch_model.bin')
-    model_cls = MODELS[args.model_name]
+    model_cls = MODEL[args.model_name]
 
     if not exists(model_path):
         generator = model_cls.from_pretrained(
@@ -113,7 +113,7 @@ class XLNetGenerator(XLNetLMHeadModel):
         super().resize_token_embeddings(new_num_tokens)
         self.resize_bias(new_num_tokens)
 
-    def forward(self, inputs):
+    def forward(self, inputs, targets=None):
         # converting the batch of inputs to torch tensor
         device = next(self.parameters()).device
 
@@ -142,7 +142,7 @@ class GPT2Generator(GPT2LMHeadModel):
 
     config = 'gpt2'
 
-    def forward(self, inputs):
+    def forward(self, inputs, targets=None):
         # converting the batch of inputs to torch tensor
         device = next(self.parameters()).device
 
@@ -161,7 +161,7 @@ class GPT2Generator(GPT2LMHeadModel):
         return outputs
 
 
-MODELS = {
+MODEL = {
     'xlnet': XLNetGenerator, 
     'gpt2': GPT2Generator
 }
