@@ -80,13 +80,6 @@ def decode(args, model, inputs, tokenizer, select_fn,
     """
     Applies decoding given a model and inputs.
     """
-    def convert_to_tensor(ids):
-        """
-        Convenience function for converting int32
-        ndarray to torch int64.
-        """
-        return torch.as_tensor(ids).long().to(device)
-
     input_ids, token_type_ids = inputs
 
     mask_id, rsp_id, eos_id = \

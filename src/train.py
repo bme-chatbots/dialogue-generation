@@ -85,7 +85,7 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=2,
+        default=64,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
@@ -126,9 +126,9 @@ def load_state(model_dir, model, optimizer, logger,
 
         model.load_state_dict(state_dict['model'])
         optimizer.load_state_dict(state_dict['optimizer'])
-        logger.info(
-            'Loading model from {}'.format(
-                model_path))
+        logger.info('Loading model from {}'.format(
+            model_path))
+
         return (
             state_dict['val_loss'],
             state_dict['epoch'],
