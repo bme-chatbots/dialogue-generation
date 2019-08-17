@@ -680,8 +680,6 @@ class DailyDialog(DialogDataset):
 
 class PersonaChat(DialogDataset):
     """
-    The persona-chat dataset from
-    https://arxiv.org/pdf/1801.07243.pdf
     """
 
     name = 'persona'
@@ -693,8 +691,6 @@ class PersonaChat(DialogDataset):
 
 class CornellMovies(DialogDataset):
     """
-    The persona-chat dataset from
-    https://arxiv.org/pdf/1801.07243.pdf
     """
 
     name = 'cornell'
@@ -706,8 +702,6 @@ class CornellMovies(DialogDataset):
 
 class OpenSubtitles(DialogDataset):
     """
-    The persona-chat dataset from
-    https://arxiv.org/pdf/1801.07243.pdf
     """
 
     name = 'subtitles'

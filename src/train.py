@@ -428,7 +428,6 @@ def main():
         for batch in loop:
             try:
                 loss, acc = train_step(batch)
-                save_state()
 
                 if master_process and loss is not None:
                     train_loss.append(loss)
