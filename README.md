@@ -12,12 +12,10 @@ The model can be trained with the following commands. Note that `<data_dir>` and
 ./run.sh -r train -d <data_name> -m <model_name>
 ```
 
-Available models are `xlnet` and `gpt2`. Currently the only available dataset option is `dailydialog`.
-
-An interactive evaluation mode is available on the trained model by switching the `train` to the `eval` flag.
+Available models are `xlnet` and `gpt2`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by switching the `train` to the `eval` flag.
 
 ```console
-./run.sh -r eval -d <data_name>" -m <model_name>
+./run.sh -r eval -d <data_name> -m <model_name>
 ```
 
 Training the model is fast and easy on Google Colaboratory, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running the following line in a cell of your colab.
