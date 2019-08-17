@@ -45,6 +45,7 @@ from torch.nn.functional import (
     kl_div, log_softmax,
     nll_loss)
 
+from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.utils import clip_grad_norm_
 from torch.nn.parallel import (
     DistributedDataParallel)
@@ -181,6 +182,19 @@ def create_optimizer(args, parameters):
         weight_decay=1e-6)
 
     return optimizer
+
+
+def compute_lr(step, factor=3e-3, warmup=3, eps=1e-7):
+    """
+    Calculates learning rate with warm up.
+    """
+    if step < warmup:
+        return (1 + factor) ** step
+    else:
+        # after reaching maximum number of steps
+        # the lr is decreased by factor as well
+        return max(((1 + factor) ** warmup) *
+                   ((1 - factor) ** (step - warmup)), eps)
 
 
 def compute_loss(outputs, targets, ignore_idx):
@@ -409,6 +423,8 @@ def main():
                 break
             except KeyboardInterrupt:
                 pass
+
+    scheduler = LambdaLR(optimizer, compute_lr)
         
     if master_process:
         logger.info(str(vars(args)))
@@ -481,6 +497,8 @@ def main():
         if master_process:
             logger.info('train loss: {:.4}'.format(
                 train_loss))
+
+        scheduler.step()
 
     writer.close()
 
