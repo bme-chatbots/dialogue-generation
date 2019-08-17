@@ -42,7 +42,8 @@ except ImportError:
 
 from torch.nn.functional import (
     cross_entropy, softmax,
-    kl_div, log_softmax)
+    kl_div, log_softmax,
+    nll_loss)
 
 from torch.nn.utils import clip_grad_norm_
 from torch.nn.parallel import (
@@ -74,7 +75,7 @@ def setup_train_args():
     parser.add_argument(
         '--mixed',
         type=bool,
-        default=False,
+        default=True,
         help='Use mixed precision training.')
     parser.add_argument(
         '--learning_rate',
@@ -138,11 +139,13 @@ def load_state(model_dir, model, optimizer, logger,
         return np.inf, 0, 0
     
 
-def create_logger(model_dir):
+def create_logger(args):
     """
     Creates a logger that outputs information to a
     file and the standard output as well.
     """
+    model_dir = join(args.model_dir, args.model_name)
+
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
 
@@ -180,21 +183,34 @@ def create_optimizer(args, parameters):
     return optimizer
 
 
-def compute_loss(outputs, labels):
+def compute_loss(outputs, targets, ignore_idx):
     """
     Computes the loss and accuracy.
     """
     logits = outputs[0]
 
     logits_view = logits.view(-1, logits.size(-1))
-    labels_view = labels.view(-1)
+    targets_view = targets.view(-1)
 
-    loss = cross_entropy(logits_view, labels_view)
+    log_probs = log_softmax(logits_view, dim=-1)
 
-    _, preds = logits_view.max(dim=-1)
+    loss = nll_loss(
+        log_probs, targets_view, 
+        ignore_index=ignore_idx,
+        reduction='sum')
 
-    accuracy = labels_view == preds
-    accuracy = accuracy.float().mean().item()
+    _, preds = log_probs.max(dim=-1)
+
+    # computing accuracy without including the
+    # values at the ignore indices
+    not_ignore = targets_view.ne(ignore_idx)
+    target_tokens = not_ignore.long().sum().item()
+    
+    correct = (targets_view == preds) * not_ignore
+    correct = correct.sum().item()
+
+    accuracy = correct / target_tokens
+    loss = loss / target_tokens
 
     return loss, accuracy
 
@@ -204,15 +220,11 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
-    distributed = args.local_rank != -1
     master_process = args.local_rank in [0, -1]
 
     model_dir = join(args.model_dir, args.model_name)
-    os.makedirs(model_dir, exist_ok=True)
 
-    logger = create_logger(model_dir)
-
-    if distributed and args.cuda:
+    if args.local_rank != -1 and args.cuda:
         # use distributed training if local rank is given
         # and GPU training is requested
         torch.cuda.set_device(args.local_rank)
@@ -228,13 +240,18 @@ def main():
     # creating dataset and storing dataset splits
     # as individual variables for convenience
     datasets, tokenizer = create_dataset(
-        args=args, device=device,
-        distributed=distributed)
+        args=args, device=device)
 
+    pad_idx = tokenizer.convert_tokens_to_ids(
+        tokenizer.pad_token)
     vocab_size = len(tokenizer)
 
+    # TODO fix xlnet nan with mixed precision
+    if args.model_name == 'xlnet':
+        args.mixed = False
+
     model = create_model(
-        model_dir=model_dir, vocab_size=vocab_size, 
+        args=args, vocab_size=vocab_size, 
         device=device)
 
     optimizer = create_optimizer(
@@ -243,6 +260,8 @@ def main():
     writer = SummaryWriter(
         logdir=model_dir,
         flush_secs=100)
+
+    logger = create_logger(args=args)
 
     # loading previous state of the training
     best_val_loss, init_epoch, step = load_state(
@@ -254,14 +273,17 @@ def main():
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
-    if distributed:
+    if args.local_rank != -1:
         model = DistributedDataParallel(
             model, device_ids=[args.local_rank], 
             output_device=args.local_rank)
 
-    # TODO get world size here instead of 1
+    world_size = 1 if not args.cuda \
+        else torch.cuda.device_count()
+
     train, valid, test = [
-        (split, ceil(size / args.batch_size / 1)) 
+        (split, ceil(
+            size / args.batch_size / world_size)) 
         for split, size in datasets]
 
     # computing the sizes of the dataset splits
@@ -275,17 +297,20 @@ def main():
         """
         Applies forward pass with the given batch.
         """
-        inputs, labels = batch
+        inputs, targets = batch
 
-        # converting labels from ndarray
-        labels = torch.as_tensor(
-            labels).long().to(device)
+        # converting targets from ndarray
+        targets = torch.as_tensor(targets)
+        targets = targets.long().to(device)
 
-        outputs = model(inputs)
+        outputs = model(
+            inputs=inputs,
+            targets=targets)
 
         loss, accuracy = compute_loss(
-            outputs=outputs,
-            labels=labels)
+            outputs=outputs, 
+            targets=targets,
+            ignore_idx=pad_idx)
 
         return loss, accuracy
 
@@ -339,28 +364,27 @@ def main():
         else:
             clip_grad_norm_(model.parameters(), max_norm)
 
-    def evaluate():
+    @torch.no_grad()
+    def evaluate(dataset, num_steps):
         """
         Constructs a validation loader and evaluates
         the model.
         """
         loop = tqdm(
-            valid_dataset(), 
-            total=num_valid_steps,
-            disable=not master_process)
+            dataset(), 
+            total=num_steps,
+            disable=not master_process,
+            desc='Eval')
 
         model.eval()
 
-        with torch.no_grad():
-            for batch in loop:
-                loss, acc = forward_step(batch)
+        for batch in loop:
+            loss, acc = forward_step(batch)
 
-                loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss, acc=acc))
+            loop.set_postfix(ordered_dict=OrderedDict(
+                loss=loss.item(), acc=acc))
 
-                yield loss
-
-        model.train()
+            yield loss.item()
 
     def save_state():
         """
@@ -373,7 +397,7 @@ def main():
             'optimizer': optimizer.state_dict(),
             'val_loss': val_loss,
             'epoch': epoch + 1,
-            'step': step   
+            'step': step
         }
 
         logger.info('Saving model to {}'.format(model_path))
@@ -394,9 +418,8 @@ def main():
         loop = tqdm(
             train_dataset(), 
             total=num_train_steps,
-            disable=not master_process)
-
-        loop.set_description('{}'.format(epoch))
+            disable=not master_process,
+            desc='Train {}'.format(epoch))
 
         train_loss = []
 
@@ -405,6 +428,7 @@ def main():
         for batch in loop:
             try:
                 loss, acc = train_step(batch)
+                save_state()
 
                 if master_process and loss is not None:
                     train_loss.append(loss)
@@ -417,7 +441,12 @@ def main():
                     loss=loss, acc=acc))
 
                 if not step % args.eval_every_step:
-                    val_loss = mean(evaluate())
+                    val_loss = mean(evaluate(
+                        dataset=valid_dataset,
+                        num_steps=num_valid_steps))
+                    
+                    # switching back to training
+                    model.train()
 
                     if master_process:
                         logger.info('val loss: {:.4}'.format(
@@ -456,30 +485,13 @@ def main():
 
     writer.close()
 
-    loop = tqdm(
-        test_dataset(), 
-        total=num_test_steps,
-        disable=not master_process)
+    test_loss = mean(evaluate(
+        dataset=test_dataset,
+        num_steps=num_test_steps))
 
-    model.eval()
-
-    test_loss = []
-
-    # running testing loop
-    with torch.no_grad():
-        for batch in loop:
-            loss, accuracy = forward_step(batch)
-
-            test_loss.append(loss.item())
-
-            loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss.item(), acc=accuracy))
-
-        test_loss = mean(test_loss)
-
-        if master_process:
-            logger.info('test loss: {:.4}'.format(
-                test_loss))
+    if master_process:
+        logger.info('test loss: {:.4}'.format(
+            test_loss))
 
 
 if __name__ == '__main__':

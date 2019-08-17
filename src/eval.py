@@ -19,15 +19,13 @@ from data import (
     setup_data_args,
     create_dataset,
     transform_dialog,
-    RSP, SP1, SP2,
-    HST, SRC)
+    RSP, SP1, SP2, HST)
 
 from model import (
     create_model,
     setup_model_args)
 
-from collate import (
-    prepare_inputs)
+from collate import PREPARE
 
 from numpy import inf
 
@@ -40,11 +38,6 @@ def setup_eval_args():
     Sets up the arguments for evaluation.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--model_dir',
-        type=str,
-        default=None,
-        help='Path of the model file.')
     parser.add_argument(
         '--cuda',
         type=bool,
@@ -70,6 +63,11 @@ def setup_eval_args():
         type=int,
         default=100,
         help='Top-k parameter for topk sampling.')
+    parser.add_argument(
+        '--local_rank',
+        type=int,
+        default=-1,
+        help='Rank for distributed training.')
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -101,28 +99,26 @@ def decode(args, model, inputs, tokenizer, select_fn,
     preds = []
 
     for _ in range(args.max_len):
-        curr_input_ids = [input_ids + \
-            preds + [mask_id]]
-        
-        curr_token_type_ids = [token_type_ids + \
-            [rsp_id] * (len(preds) + 1)]
+        curr_input_ids = [input_ids + preds]
 
-        inputs = prepare_inputs(
+        curr_token_type_ids = [token_type_ids + \
+            [rsp_id] * len(preds)]
+
+        if args.model_name == 'xlnet':
+            curr_input_ids.append(mask_id)
+            curr_token_type_ids.append(rsp_id)
+
+        inputs = PREPARE[args.model_name](
             input_ids=curr_input_ids,
             token_type_ids=curr_token_type_ids)
 
-        padded_input_ids, padded_token_type_ids, \
-            attn_mask, perm_mask, target_map = [
-                convert_to_tensor(m) for m in inputs]
-        
         # the first value of the output tuple from
         # the model is the next token logits tensor
-        logits = model(
-            input_ids=padded_input_ids,
-            token_type_ids=padded_token_type_ids,
-            attention_mask=attn_mask,
-            perm_mask=perm_mask,
-            target_mapping=target_map.float())[0]
+        logits = model(inputs)[0]
+
+        # TODO find a better solution
+        if args.model_name == 'gpt2':
+            logits = logits[0][-1]
 
         logits = logits.squeeze()
         logits = select_fn(args, logits)
@@ -186,12 +182,14 @@ def main():
     args = setup_eval_args()
     device = torch.device('cuda' if args.cuda else 'cpu')
 
+    model_dir = join(args.model_dir, args.model_name)
+
     state_dict = torch.load(
-        join(args.model_dir, 'model.pt'),
+        join(model_dir, 'model.pt'),
         map_location=device)
 
     _, tokenizer = create_dataset(
-        args, device, distributed=False)
+        args=args, device=device)
 
     vocab_size = len(tokenizer)
 
@@ -206,7 +204,6 @@ def main():
     special_ids = tokenizer.convert_tokens_to_ids([
         SP1, SP2, tokenizer.bos_token,
         tokenizer.eos_token, HST, RSP,
-        tokenizer.mask_token
     ])
 
     @torch.no_grad()
@@ -218,7 +215,6 @@ def main():
 
         inputs = transform_dialog(
             history[:args.max_hist],
-            generated=[],
             special_ids=special_ids)
         
         preds = decode(
