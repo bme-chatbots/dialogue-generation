@@ -18,55 +18,82 @@ from libcpp.vector cimport vector
 from libc.stdint cimport int32_t
 
 
-def xlnet_padded_collate(vector[vector[vector[int]]] example):
+cdef inline int int_max(int a, int b) nogil:
+    """
+    Simple max function.
+    """
+    return a if a >= b else b
+
+
+cdef inline int max_len(vector[vector[int]] mat) nogil:
+    """
+    Finds the length of the longest element.
+    """
+    cdef Py_ssize_t idx, max_size = 0, size = mat.size()
+
+    for idx in range(size):
+        max_size = int_max(mat[idx].size(), max_size)
+
+    return max_size
+
+
+@cython.boundscheck(False)
+@cython.nonecheck(False)
+def xlnet_padded_collate(vector[vector[vector[int]]] examples):
     """
     Collate function for merging a list of examples into
     a batch tensor.
     """
-    # unzipping the examples lists
-    cdef vector[vector[int]] input_ids, token_type_ids, targets
-    cdef Py_ssize_t btc_idx, btc_size = example.size()
+    cdef vector[vector[int]] input_ids, token_type_ids, target_ids
+    cdef Py_ssize_t btc_idx, btc_size = examples.size()
 
     for btc_idx in range(btc_size):
-        input_ids.push_back(example[btc_idx][0])
-        token_type_ids.push_back(example[btc_idx][1])
-        targets.push_back(example[btc_idx][2])
+        input_ids.push_back(examples[btc_idx][0])
+        token_type_ids.push_back(examples[btc_idx][1])
+        target_ids.push_back(examples[btc_idx][2])
     
     # input_tensors contains the attention_mask and input_ids
-    input_tensors = create_xlnet_batch(input_ids, token_type_ids)
-    target_tensor = batchify(targets, -1)
+    input_tensors, target_tensor = create_xlnet_train_batch(
+        input_ids, token_type_ids, target_ids)
 
     return input_tensors, target_tensor
 
 
-def gpt2_padded_collate(vector[vector[vector[int]]] example):
+@cython.boundscheck(False)
+@cython.nonecheck(False)
+def gpt2_padded_collate(vector[vector[vector[int]]] examples):
     """
     Collate function for merging a list of examples into
     a batch tensor.
     """
-    # unzipping the examples lists
-    cdef vector[vector[int]] input_ids, token_type_ids, targets
-    cdef Py_ssize_t btc_idx, btc_size = example.size()
+    cdef vector[vector[int]] input_ids, token_type_ids
+    cdef Py_ssize_t btc_idx, btc_size = examples.size()
     cdef vector[int] target_lengths
 
     for btc_idx in range(btc_size):
-        input_ids.push_back(example[btc_idx][0])
-        token_type_ids.push_back(example[btc_idx][1])
-        targets.push_back(example[btc_idx][2])
-        target_lengths.push_back(example[btc_idx][2].size())
+        input_ids.push_back(examples[btc_idx][0])
+        token_type_ids.push_back(examples[btc_idx][1])
+        target_lengths.push_back(examples[btc_idx][2].size())
     
-    # input_tensors contains the attention_mask and input_ids
+    # `tensor` contains the input tensors for the model
     cdef np.ndarray[np.int32_t, ndim=3] tensors = \
         create_gpt2_train_batch(
             input_ids, token_type_ids, target_lengths)
 
-    cdef np.ndarray[np.int32_t, ndim=3] input_tensors = \
-        tensors[:2, :, :-1]
+    # the inputs of the model are the first N elements
+    # of the sequence thus the id_tensor is shifted backward
+    cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
+        tensors[0, :, :-1]
 
+    cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
+        tensors[1, :, :-1]
+
+    # the target tensor contains the target outputs for
+    # the sequence thus the values are shifted forward
     cdef np.ndarray[np.int32_t, ndim=2] target_tensor = \
         tensors[2, :, 1:]
 
-    return input_tensors, target_tensor
+    return (input_id_tensor, token_type_id_tensor), target_tensor
 
 
 COLLATE = {
@@ -80,7 +107,7 @@ def prepare_xlnet_inputs(input_ids, token_type_ids):
     Creates padded arrays from the provided inputs
     for the XLNet model during inference.
     """
-    return create_xlnet_batch(input_ids, token_type_ids)
+    return create_xlnet_eval_batch(input_ids, token_type_ids)
 
 
 def prepare_gpt2_inputs(input_ids, token_type_ids):
@@ -91,7 +118,7 @@ def prepare_gpt2_inputs(input_ids, token_type_ids):
     return create_gpt2_eval_batch(input_ids, token_type_ids)
 
 
-PERPARE = {
+PREPARE = {
     'xlnet': prepare_xlnet_inputs,
     'gpt2': prepare_gpt2_inputs
 }
@@ -100,51 +127,102 @@ PERPARE = {
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.nonecheck(False)
-cdef batchify(vector[vector[int]] ids, const int32_t pad):
+cdef create_xlnet_train_batch(
+        vector[vector[int]] input_ids, 
+        vector[vector[int]] token_type_ids,
+        vector[vector[int]] target_ids):
     """
     Creates a batch from a list of utterances.
     """
-    cdef Py_ssize_t btc_size = ids.size()
+    cdef Py_ssize_t btc_size = input_ids.size()
     cdef Py_ssize_t btc_idx
     cdef vector[int] utr
-    cdef int utr_len, max_len = 0
+    cdef int trg_size, src_size
 
-    # computing the sequence length for the batch
-    for btc_idx in range(btc_size):
-        utr = ids[btc_idx]
-        utr_len = utr.size()
-        if utr_len > max_len:
-            max_len = utr_len
+    cdef int max_src = max_len(input_ids)
+    cdef int max_trg = max_len(target_ids)
 
-    cdef np.ndarray[np.int32_t, ndim=2] tensor = \
-        np.empty([btc_size, max_len], dtype=np.int32)
+    cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
+        np.empty([btc_size, max_src], dtype=np.int32)
+    cdef int32_t [:, :] input_id_view = input_id_tensor
 
-    cdef int32_t [:, :] tensor_view = tensor
+    cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
+        np.empty([btc_size, max_src], dtype=np.int32)
+    cdef int32_t [:, :] token_type_id_view = token_type_id_tensor
 
-    cdef Py_ssize_t utr_size, idx, diff_size, \
-        diff_idx, pad_idx
+    cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
+        np.ones([btc_size, max_src], dtype=np.int32)
+    cdef int32_t [:, :] attn_mask_view = attn_mask
+
+    cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
+        np.zeros([btc_size, max_src, max_src], dtype=np.int32)
+    cdef int32_t [:, :, :] perm_mask_view = perm_mask
+
+    cdef np.ndarray[np.int32_t, ndim=3] target_map = \
+        np.zeros([btc_size, max_trg, max_src], dtype=np.int32)
+    cdef int32_t [:, :, :] target_map_view = target_map
+
+    cdef np.ndarray[np.int32_t, ndim=2] target_tensor = \
+        np.zeros([btc_size, max_trg], dtype=np.int32)
+    cdef int32_t [:, :] target_view = target_tensor
+
+    cdef Py_ssize_t utr_size, idx, src_diff_size, \
+        trg_diff_size, diff_idx, pad_idx, utr_idx, trg_idx
 
     with nogil:
         for btc_idx in range(btc_size):
-            utr_size = ids[btc_idx].size()
-            diff_size = max_len - utr_size
+            utr_size = input_ids[btc_idx].size()
+
+            trg_size = target_ids[btc_idx].size()
+            trg_diff_size = max_trg - trg_size
+
+            src_size = utr_size - trg_size
+            src_diff_size = max_src - utr_size
+
+            for idx in range(trg_size):
+                target_view[btc_idx, idx] = \
+                target_ids[btc_idx][idx]
+
+            for diff_idx in range(trg_diff_size):
+                pad_idx = trg_size + diff_idx
+                target_view[btc_idx, pad_idx] = 5
 
             for idx in range(utr_size):
-                tensor_view[btc_idx, idx] = \
-                    ids[btc_idx][idx]
+                input_id_view[btc_idx, idx] = \
+                    input_ids[btc_idx][idx]
+                token_type_id_view[btc_idx, idx] = \
+                    token_type_ids[btc_idx][idx]
 
-            for diff_idx in range(diff_size):
+            for utr_idx in range(utr_size):
+                trg_idx = int_max(src_size - utr_idx, 0)
+                for idx in range(
+                        trg_size - trg_idx + src_diff_size):
+                    perm_mask_view[
+                        btc_idx, utr_idx, 
+                        src_size + trg_idx + idx] = 1
+
+            for trg_idx in range(trg_size):
+                target_map_view[
+                    btc_idx, trg_idx, src_size + trg_idx] = 1
+
+            for diff_idx in range(src_diff_size):
                 pad_idx = utr_size + diff_idx 
                 # 5 is the hard coded pad idx
-                tensor[btc_idx, pad_idx] = pad
+                input_id_view[btc_idx, pad_idx] = 5
+                token_type_id_view[btc_idx, pad_idx] = 5
+                attn_mask_view[btc_idx, pad_idx] = 0
+
+                for idx in range(max_src):
+                    perm_mask_view[btc_idx, pad_idx, idx] = 1
     
-    return tensor
+    return (input_id_tensor, token_type_id_tensor,
+        attn_mask, perm_mask, target_map), target_tensor
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.nonecheck(False)
-cdef create_xlnet_batch(
+cdef create_xlnet_eval_batch(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids):
     """
@@ -152,117 +230,27 @@ cdef create_xlnet_batch(
     """
     cdef Py_ssize_t btc_size = input_ids.size()
     cdef Py_ssize_t btc_idx
-    cdef vector[int] utr
-    cdef int utr_len, max_len = 0
-
-    # computing the sequence length for the batch
-    for btc_idx in range(btc_size):
-        utr = input_ids[btc_idx]
-        utr_len = utr.size()
-        if utr_len > max_len:
-            max_len = utr_len
+    cdef int max_src = max_len(input_ids)
 
     cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
-        np.empty([btc_size, max_len], dtype=np.int32)
-
+        np.empty([btc_size, max_src], dtype=np.int32)
     cdef int32_t [:, :] input_id_view = input_id_tensor
 
-    # input_ids contain the history (the source utterance as well)
-    # and the first n number of target tokens (the `labels` are
-    # the n + 1 th tokens in the target utterance) the id `6` is
-    # the mask token which will be predicted by the model and `5`
-    # is the padding token
-
-    # [
-    #  [    1, 32001, 11781, ...,   32000,    9,    35,     6],
-    #   ...
-    #  [    1, 32001,    35, ...,   32000,   39,     6,     5]
-    # ]
-
     cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
-        np.empty([btc_size, max_len], dtype=np.int32)
-
+        np.empty([btc_size, max_src], dtype=np.int32)
     cdef int32_t [:, :] token_type_id_view = token_type_id_tensor
 
-    # token_type_ids has the same size as input_ids and its
-    # purpose is to mark the role_id of each token in the input
-    # in this case the role is the id of the person that the
-    # utterance comes from (speaker1 or speaker2) but this is
-    # a subject to change in the near future
-
-    # [
-    #  [32001, 32001, 32001, ..., 32000, 32000, 32000, 32000],
-    #   ...
-    #  [32001, 32001, 32001, ..., 32000, 32000, 32000, 5]
-    # ]
-
     cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
-        np.ones([btc_size, max_len], dtype=np.int32)
-
+        np.ones([btc_size, max_src], dtype=np.int32)
     cdef int32_t [:, :] attn_mask_view = attn_mask
 
-    # attn_mask also has the same dimensions as input_ids and
-    # its purpose is to be a mask over the non-padding token ids
-    # in the input, which is used mainly for attention computation
-    # the mask is 1 at non-padding tokens and 0 at padding tokens
-
-    # [
-    #  [1, 1, 1, ..., 1, 1, 1, 1],
-    #  [1, 1, 1, ..., 1, 1, 1, 0],
-    # ]
-
     cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
-        np.zeros([btc_size, max_len, max_len], dtype=np.int32)
-
+        np.zeros([btc_size, max_src, max_src], dtype=np.int32)
     cdef int32_t [:, :, :] perm_mask_view = perm_mask
 
-    # the value of this tensor at [btc_idx, i, j] marks whether
-    # the value at the i index of the sequence should attend to
-    # the value at the j index of the sequence in terms of
-    # attention computation thus it is 1 everywhere except at
-    # mask and pad token locations
-
-    # [
-    #  [
-    #   [0, 0, 0, ..., 0, 0, 0, 1],
-    #   [0, 0, 0, ..., 0, 0, 0, 1],
-    #   [0, 0, 0, ..., 0, 0, 0, 1],
-    #    ...,
-    #   [0, 0, 0, ..., 0, 0, 0, 1],
-    #   [0, 0, 0, ..., 0, 0, 0, 1],
-    #   [0, 0, 0, ..., 0, 0, 0, 1]
-    #  ],
-    #  [
-    #   [0, 0, 0, ..., 0, 0, 1, 1],
-    #   [0, 0, 0, ..., 0, 0, 1, 1],
-    #   [0, 0, 0, ..., 0, 0, 1, 1],
-    #    ...,
-    #   [0, 0, 0, ..., 0, 0, 1, 1],
-    #   [0, 0, 0, ..., 0, 0, 1, 1],
-    #   [0, 0, 0, ..., 0, 0, 1, 1]
-    #  ],
-    # ]
-
     cdef np.ndarray[np.int32_t, ndim=3] target_map = \
-        np.zeros([btc_size, 1, max_len], dtype=np.int32)
-
+        np.zeros([btc_size, 1, max_src], dtype=np.int32)
     cdef int32_t [:, :, :] target_map_view = target_map
-
-    # this tensor marks the location and order of the
-    # expected output or target location
-    # the size of the 2nd dimension of this tensor is the 
-    # number of outputs which is 1 in this case and the 
-    # 3rd dim is max_length which is 0 everywhere except
-    # at the location of the mask token
-
-    # [
-    #  [
-    #   [0, 0, 0, ..., 0, 0, 0, 1]
-    #  ],
-    #  [
-    #   [0, 0, 0, ..., 0, 0, 1, 0]
-    #  ]
-    # ]
 
     cdef Py_ssize_t utr_size, idx, diff_size, \
         diff_idx, pad_idx
@@ -270,7 +258,7 @@ cdef create_xlnet_batch(
     with nogil:
         for btc_idx in range(btc_size):
             utr_size = input_ids[btc_idx].size()
-            diff_size = max_len - utr_size
+            diff_size = max_src - utr_size
 
             target_map_view[btc_idx, 0, utr_size - 1] = 1
 
@@ -280,7 +268,7 @@ cdef create_xlnet_batch(
                 token_type_id_view[btc_idx, idx] = \
                     token_type_ids[btc_idx][idx]
 
-            for idx in range(max_len):
+            for idx in range(max_src):
                 perm_mask_view[btc_idx, idx, utr_size - 1] = 1
 
             for diff_idx in range(diff_size):
@@ -290,11 +278,12 @@ cdef create_xlnet_batch(
                 token_type_id_view[btc_idx, pad_idx] = 5
                 attn_mask_view[btc_idx, pad_idx] = 0
 
-                for idx in range(max_len):
+                for idx in range(max_src):
                     perm_mask_view[btc_idx, idx, pad_idx] = 1
     
     return input_id_tensor, token_type_id_tensor, \
         attn_mask, perm_mask, target_map
+
 
 
 @cython.boundscheck(False)
@@ -303,24 +292,18 @@ cdef create_xlnet_batch(
 cdef create_gpt2_train_batch(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids,
-        vector[int] target_lengths):
+        vector[int] target_lens):
     """
     Creates a batch from a list of utterances.
     """
     cdef Py_ssize_t btc_size = input_ids.size()
     cdef Py_ssize_t btc_idx
     cdef vector[int] utr
-    cdef int utr_len, max_len = 0
 
-    # computing the sequence length for the batch
-    for btc_idx in range(btc_size):
-        utr = input_ids[btc_idx]
-        utr_len = utr.size()
-        if utr_len > max_len:
-            max_len = utr_len
+    cdef int max_src = max_len(input_ids)
 
     cdef np.ndarray[np.int32_t, ndim=3] input_tensor = \
-        np.empty([3, btc_size, max_len], dtype=np.int32)
+        np.empty([3, btc_size, max_src], dtype=np.int32)
 
     cdef int32_t [:, :, :] input_view = input_tensor
 
@@ -330,8 +313,8 @@ cdef create_gpt2_train_batch(
     with nogil:
         for btc_idx in range(btc_size):
             utr_size = input_ids[btc_idx].size()
-            trg_size = target_lengths[btc_idx]
-            diff_size = max_len - utr_size
+            trg_size = target_lens[btc_idx]
+            diff_size = max_src - utr_size
 
             for idx in range(utr_size):
                 input_view[0, btc_idx, idx] = \
@@ -347,7 +330,8 @@ cdef create_gpt2_train_batch(
 
             for diff_idx in range(diff_size):
                 pad_idx = utr_size + diff_idx 
-                # -1 is the hard coded pad idx
+                # 50261 is the hard coded pad idx for
+                # the GPT-2 model
                 input_view[0, btc_idx, pad_idx] = 50261
                 input_view[1, btc_idx, pad_idx] = 50261
                 input_view[2, btc_idx, pad_idx] = 50261
@@ -367,27 +351,21 @@ cdef create_gpt2_eval_batch(
     cdef Py_ssize_t btc_size = input_ids.size()
     cdef Py_ssize_t btc_idx
     cdef vector[int] utr
-    cdef int utr_len, max_len = 0
 
-    # computing the sequence length for the batch
-    for btc_idx in range(btc_size):
-        utr = input_ids[btc_idx]
-        utr_len = utr.size()
-        if utr_len > max_len:
-            max_len = utr_len
+    cdef int max_src = max_len(input_ids)
 
     cdef np.ndarray[np.int32_t, ndim=3] input_tensor = \
-        np.empty([2, btc_size, max_len], dtype=np.int32)
+        np.empty([2, btc_size, max_src], dtype=np.int32)
 
     cdef int32_t [:, :, :] input_view = input_tensor
 
     cdef Py_ssize_t utr_size, idx, diff_size, \
-        trg_size, diff_idx, pad_idx
+        diff_idx, pad_idx
 
     with nogil:
         for btc_idx in range(btc_size):
             utr_size = input_ids[btc_idx].size()
-            diff_size = max_len - utr_size
+            diff_size = max_src - utr_size
 
             for idx in range(utr_size):
                 input_view[0, btc_idx, idx] = \

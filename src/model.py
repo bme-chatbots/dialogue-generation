@@ -151,12 +151,11 @@ class GPT2Generator(GPT2LMHeadModel):
             for t in inputs
         ]
 
-        input_ids, token_type_ids, attn_mask = inputs
+        input_ids, token_type_ids = inputs
 
         outputs = super().forward(
             input_ids=input_ids.long(),
-            token_type_ids=token_type_ids.long(),
-            attention_mask=attn_mask.byte())
+            token_type_ids=token_type_ids.long())
         
         return outputs
 

@@ -42,7 +42,8 @@ except ImportError:
 
 from torch.nn.functional import (
     cross_entropy, softmax,
-    kl_div, log_softmax)
+    kl_div, log_softmax,
+    nll_loss)
 
 from torch.nn.utils import clip_grad_norm_
 from torch.nn.parallel import (
@@ -189,16 +190,27 @@ def compute_loss(outputs, targets, ignore_idx):
     logits = outputs[0]
 
     logits_view = logits.view(-1, logits.size(-1))
-    labels_view = targets.view(-1)
+    targets_view = targets.view(-1)
 
-    loss = cross_entropy(
-        logits_view, labels_view, 
-        ignore_index=ignore_idx)
+    log_probs = log_softmax(logits_view, dim=-1)
 
-    _, preds = logits_view.max(dim=-1)
+    loss = nll_loss(
+        log_probs, targets_view, 
+        ignore_index=ignore_idx,
+        reduction='sum')
 
-    accuracy = labels_view == preds
-    accuracy = accuracy.float().mean().item()
+    _, preds = log_probs.max(dim=-1)
+
+    # computing accuracy without including the
+    # values at the ignore indices
+    not_ignore = targets_view.ne(ignore_idx)
+    target_tokens = not_ignore.long().sum().item()
+    
+    correct = (targets_view == preds) * not_ignore
+    correct = correct.sum().item()
+
+    accuracy = correct / target_tokens
+    loss = loss / target_tokens
 
     return loss, accuracy
 
@@ -286,7 +298,6 @@ def main():
         Applies forward pass with the given batch.
         """
         inputs, targets = batch
-        print(inputs, targets)
 
         # converting targets from ndarray
         targets = torch.as_tensor(targets)
@@ -363,7 +374,7 @@ def main():
             dataset(), 
             total=num_steps,
             disable=not master_process,
-            desc='eval')
+            desc='Eval')
 
         model.eval()
 
@@ -386,7 +397,7 @@ def main():
             'optimizer': optimizer.state_dict(),
             'val_loss': val_loss,
             'epoch': epoch + 1,
-            'step': step   
+            'step': step
         }
 
         logger.info('Saving model to {}'.format(model_path))
@@ -408,7 +419,7 @@ def main():
             train_dataset(), 
             total=num_train_steps,
             disable=not master_process,
-            desc='train {}'.format(epoch))
+            desc='Train {}'.format(epoch))
 
         train_loss = []
 
@@ -417,6 +428,7 @@ def main():
         for batch in loop:
             try:
                 loss, acc = train_step(batch)
+                save_state()
 
                 if master_process and loss is not None:
                     train_loss.append(loss)
