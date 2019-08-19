@@ -378,7 +378,6 @@ def main():
         else:
             clip_grad_norm_(model.parameters(), max_norm)
 
-    @torch.no_grad()
     def evaluate(dataset, num_steps):
         """
         Constructs a validation loader and evaluates
@@ -456,9 +455,10 @@ def main():
                     loss=loss, acc=acc))
 
                 if not step % args.eval_every_step:
-                    val_loss = mean(evaluate(
-                        dataset=valid_dataset,
-                        num_steps=num_valid_steps))
+                    with torch.no_grad():
+                        val_loss = mean(evaluate(
+                            dataset=valid_dataset,
+                            num_steps=num_valid_steps))
                     
                     # switching back to training
                     model.train()
@@ -502,9 +502,10 @@ def main():
 
     writer.close()
 
-    test_loss = mean(evaluate(
-        dataset=test_dataset,
-        num_steps=num_test_steps))
+    with torch.no_grad():
+        test_loss = mean(evaluate(
+            dataset=test_dataset,
+            num_steps=num_test_steps))
 
     if master_process:
         logger.info('test loss: {:.4}'.format(

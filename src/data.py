@@ -24,11 +24,6 @@ from math import ceil
 from copy import deepcopy
 from collections import namedtuple
 
-from os.path import (
-    exists, join,
-    dirname, abspath,
-    basename, splitext)
-
 from torch.utils.data import (
     Dataset, DataLoader,
     Sampler)
@@ -42,6 +37,11 @@ from pytorch_transformers import (
 
 from collate import COLLATE
 from model import MODEL
+
+from os.path import (
+    exists, join,
+    dirname, abspath,
+    basename, splitext)
 
 
 SP1 = '<sp1>'
@@ -530,8 +530,7 @@ def create_dataset(args, device):
         files = data_cls.download(args=args)
 
         train, valid, test = data_cls.transform(
-            args=args, files=files,
-            tokenizer=tokenizer)
+            args=args, files=files, tokenizer=tokenizer)
 
         train_files, train_size = train
         valid_files, valid_size = valid
