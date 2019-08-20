@@ -101,7 +101,7 @@ def setup_train_args():
     parser.add_argument(
         '--eval_every_step',
         type=int,
-        default=10000,
+        default=3000,
         help='Evaluation frequency in steps.')
     parser.add_argument(
         '--local_rank',

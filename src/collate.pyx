@@ -124,9 +124,9 @@ PREPARE = {
 }
 
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
-@cython.nonecheck(False)
+# @cython.boundscheck(False)
+# @cython.wraparound(False)
+# @cython.nonecheck(False)
 cdef create_xlnet_train_batch(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids,
@@ -137,37 +137,38 @@ cdef create_xlnet_train_batch(
     cdef Py_ssize_t btc_size = input_ids.size()
     cdef Py_ssize_t btc_idx
     cdef vector[int] utr
-    cdef int trg_size, src_size
+    cdef int trg_size, seq_size
 
-    cdef int max_src = max_len(input_ids)
+    cdef int max_seq = max_len(input_ids)
     cdef int max_trg = max_len(target_ids)
 
     cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
-        np.empty([btc_size, max_src], dtype=np.int32)
+        np.empty([btc_size, max_seq], dtype=np.int32)
     cdef int32_t [:, :] input_id_view = input_id_tensor
 
     cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
-        np.empty([btc_size, max_src], dtype=np.int32)
+        np.empty([btc_size, max_seq], dtype=np.int32)
     cdef int32_t [:, :] token_type_id_view = token_type_id_tensor
 
     cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
-        np.ones([btc_size, max_src], dtype=np.int32)
+        np.ones([btc_size, max_seq], dtype=np.int32)
     cdef int32_t [:, :] attn_mask_view = attn_mask
 
     cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
-        np.zeros([btc_size, max_src, max_src], dtype=np.int32)
+        np.zeros([btc_size, max_seq, max_seq], dtype=np.int32)
     cdef int32_t [:, :, :] perm_mask_view = perm_mask
 
     cdef np.ndarray[np.int32_t, ndim=3] target_map = \
-        np.zeros([btc_size, max_trg, max_src], dtype=np.int32)
+        np.zeros([btc_size, max_trg, max_seq], dtype=np.int32)
     cdef int32_t [:, :, :] target_map_view = target_map
 
     cdef np.ndarray[np.int32_t, ndim=2] target_tensor = \
         np.zeros([btc_size, max_trg], dtype=np.int32)
     cdef int32_t [:, :] target_view = target_tensor
 
-    cdef Py_ssize_t utr_size, idx, src_diff_size, \
-        trg_diff_size, diff_idx, pad_idx, utr_idx, trg_idx
+    cdef Py_ssize_t utr_size, idx, diff_size, \
+        trg_diff_size, diff_idx, pad_idx, utr_idx, trg_idx, \
+        mask_size
 
     with nogil:
         for btc_idx in range(btc_size):
@@ -176,8 +177,8 @@ cdef create_xlnet_train_batch(
             trg_size = target_ids[btc_idx].size()
             trg_diff_size = max_trg - trg_size
 
-            src_size = utr_size - trg_size
-            src_diff_size = max_src - utr_size
+            seq_size = utr_size - trg_size
+            diff_size = max_seq - utr_size
 
             for idx in range(trg_size):
                 target_view[btc_idx, idx] = \
@@ -194,25 +195,26 @@ cdef create_xlnet_train_batch(
                     token_type_ids[btc_idx][idx]
 
             for utr_idx in range(utr_size):
-                trg_idx = int_max(src_size - utr_idx, 0)
-                for idx in range(
-                        trg_size - trg_idx + src_diff_size):
+                mask_size = utr_idx + 1 - seq_size
+                mask_size = int_max(mask_size, 0)
+                mask_size = utr_size - seq_size - mask_size
+                for idx in range(mask_size + diff_size):
                     perm_mask_view[
                         btc_idx, utr_idx, 
-                        src_size + trg_idx + idx] = 1
+                        max_seq - idx - 1] = 1
 
             for trg_idx in range(trg_size):
                 target_map_view[
-                    btc_idx, trg_idx, src_size + trg_idx] = 1
+                    btc_idx, trg_idx, seq_size + trg_idx] = 1
 
-            for diff_idx in range(src_diff_size):
+            for diff_idx in range(diff_size):
                 pad_idx = utr_size + diff_idx 
                 # 5 is the hard coded pad idx
                 input_id_view[btc_idx, pad_idx] = 5
                 token_type_id_view[btc_idx, pad_idx] = 5
                 attn_mask_view[btc_idx, pad_idx] = 0
 
-                for idx in range(max_src):
+                for idx in range(max_seq):
                     perm_mask_view[btc_idx, pad_idx, idx] = 1
     
     return (input_id_tensor, token_type_id_tensor,
@@ -230,26 +232,26 @@ cdef create_xlnet_eval_batch(
     """
     cdef Py_ssize_t btc_size = input_ids.size()
     cdef Py_ssize_t btc_idx
-    cdef int max_src = max_len(input_ids)
+    cdef int max_seq = max_len(input_ids)
 
     cdef np.ndarray[np.int32_t, ndim=2] input_id_tensor = \
-        np.empty([btc_size, max_src], dtype=np.int32)
+        np.empty([btc_size, max_seq], dtype=np.int32)
     cdef int32_t [:, :] input_id_view = input_id_tensor
 
     cdef np.ndarray[np.int32_t, ndim=2] token_type_id_tensor = \
-        np.empty([btc_size, max_src], dtype=np.int32)
+        np.empty([btc_size, max_seq], dtype=np.int32)
     cdef int32_t [:, :] token_type_id_view = token_type_id_tensor
 
     cdef np.ndarray[np.int32_t, ndim=2] attn_mask = \
-        np.ones([btc_size, max_src], dtype=np.int32)
+        np.ones([btc_size, max_seq], dtype=np.int32)
     cdef int32_t [:, :] attn_mask_view = attn_mask
 
     cdef np.ndarray[np.int32_t, ndim=3] perm_mask = \
-        np.zeros([btc_size, max_src, max_src], dtype=np.int32)
+        np.zeros([btc_size, max_seq, max_seq], dtype=np.int32)
     cdef int32_t [:, :, :] perm_mask_view = perm_mask
 
     cdef np.ndarray[np.int32_t, ndim=3] target_map = \
-        np.zeros([btc_size, 1, max_src], dtype=np.int32)
+        np.zeros([btc_size, 1, max_seq], dtype=np.int32)
     cdef int32_t [:, :, :] target_map_view = target_map
 
     cdef Py_ssize_t utr_size, idx, diff_size, \
@@ -258,7 +260,7 @@ cdef create_xlnet_eval_batch(
     with nogil:
         for btc_idx in range(btc_size):
             utr_size = input_ids[btc_idx].size()
-            diff_size = max_src - utr_size
+            diff_size = max_seq - utr_size
 
             target_map_view[btc_idx, 0, utr_size - 1] = 1
 
@@ -268,7 +270,7 @@ cdef create_xlnet_eval_batch(
                 token_type_id_view[btc_idx, idx] = \
                     token_type_ids[btc_idx][idx]
 
-            for idx in range(max_src):
+            for idx in range(max_seq):
                 perm_mask_view[btc_idx, idx, utr_size - 1] = 1
 
             for diff_idx in range(diff_size):
@@ -278,7 +280,7 @@ cdef create_xlnet_eval_batch(
                 token_type_id_view[btc_idx, pad_idx] = 5
                 attn_mask_view[btc_idx, pad_idx] = 0
 
-                for idx in range(max_src):
+                for idx in range(max_seq):
                     perm_mask_view[btc_idx, idx, pad_idx] = 1
     
     return input_id_tensor, token_type_id_tensor, \
@@ -300,10 +302,10 @@ cdef create_gpt2_train_batch(
     cdef Py_ssize_t btc_idx
     cdef vector[int] utr
 
-    cdef int max_src = max_len(input_ids)
+    cdef int max_seq = max_len(input_ids)
 
     cdef np.ndarray[np.int32_t, ndim=3] input_tensor = \
-        np.empty([3, btc_size, max_src], dtype=np.int32)
+        np.empty([3, btc_size, max_seq], dtype=np.int32)
 
     cdef int32_t [:, :, :] input_view = input_tensor
 
@@ -314,7 +316,7 @@ cdef create_gpt2_train_batch(
         for btc_idx in range(btc_size):
             utr_size = input_ids[btc_idx].size()
             trg_size = target_lens[btc_idx]
-            diff_size = max_src - utr_size
+            diff_size = max_seq - utr_size
 
             for idx in range(utr_size):
                 input_view[0, btc_idx, idx] = \
@@ -352,10 +354,10 @@ cdef create_gpt2_eval_batch(
     cdef Py_ssize_t btc_idx
     cdef vector[int] utr
 
-    cdef int max_src = max_len(input_ids)
+    cdef int max_seq = max_len(input_ids)
 
     cdef np.ndarray[np.int32_t, ndim=3] input_tensor = \
-        np.empty([2, btc_size, max_src], dtype=np.int32)
+        np.empty([2, btc_size, max_seq], dtype=np.int32)
 
     cdef int32_t [:, :, :] input_view = input_tensor
 
@@ -365,7 +367,7 @@ cdef create_gpt2_eval_batch(
     with nogil:
         for btc_idx in range(btc_size):
             utr_size = input_ids[btc_idx].size()
-            diff_size = max_src - utr_size
+            diff_size = max_seq - utr_size
 
             for idx in range(utr_size):
                 input_view[0, btc_idx, idx] = \

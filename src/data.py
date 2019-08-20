@@ -625,7 +625,7 @@ def create_sampler_cls(sampler_cls):
             # NOTE shuffling groups should be
             # deterministic with regards to epoch
             groups = list(groups)
-            random.shuffle(groups)
+            # random.shuffle(groups)
 
             for group in groups:
                 indices = list(generate_indices(group))

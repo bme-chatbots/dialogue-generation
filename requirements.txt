@@ -3,3 +3,4 @@ torch
 pytorch-transformers
 tqdm
 tensorboardX
+Cython

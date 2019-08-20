@@ -20,5 +20,5 @@ module_path = os.path.join(project_path, 'src', 'collate.pyx')
 
 setup(
     ext_modules=cythonize(module_path, annotate=True, language='c++'),
-    include_dirs=[numpy.get_include()],
+    include_dirs=[numpy.get_include()]
 )
