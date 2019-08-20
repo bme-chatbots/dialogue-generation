@@ -86,7 +86,7 @@ def setup_train_args():
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=64,
+        default=5,
         help='Batch size during training.')
     parser.add_argument(
         '--patience',
@@ -488,6 +488,9 @@ def main():
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     logger.warn('skipping step (oom)')
+
+                else:
+                    raise RuntimeError(e)
 
         if len(train_loss) > 0:
             train_loss = mean(train_loss)
