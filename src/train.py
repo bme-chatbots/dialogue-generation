@@ -76,7 +76,7 @@ def setup_train_args():
     parser.add_argument(
         '--mixed',
         type=bool,
-        default=True,
+        default=APEX_INSTALLED,
         help='Use mixed precision training.')
     parser.add_argument(
         '--learning_rate',
