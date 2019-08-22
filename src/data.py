@@ -35,8 +35,8 @@ from pytorch_transformers import (
     XLNetTokenizer,
     GPT2Tokenizer)
 
-from collate import COLLATE
-from model import MODEL
+from src.collate import COLLATE
+from src.model import MODEL
 
 from os.path import (
     exists, join,

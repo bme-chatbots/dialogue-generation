@@ -15,13 +15,13 @@ import torch
 
 from os.path import join
 
-from data import (
+from src.data import (
     setup_data_args,
     create_dataset,
     transform_dialog,
     RSP, SP1, SP2, HST)
 
-from model import (
+from src.model import (
     create_model,
     setup_model_args)
 

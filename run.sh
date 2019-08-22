@@ -42,17 +42,17 @@ mkdir -p $DOWNLOAD_DIR
 
 if [ $RUN_MODE == "train" ]
 then
-    python $(dirname "$0")/src/train.py --model_name $MODEL_NAME \
-                                        --data_name $DATA_NAME \
-                                        --model_dir $MODEL_DIR \
-                                        --data_dir $DATA_DIR \
-                                        --download_dir $DOWNLOAD_DIR
+    python -m src.train --model_name $MODEL_NAME \
+                        --data_name $DATA_NAME \
+                        --model_dir $MODEL_DIR \
+                        --data_dir $DATA_DIR \
+                        --download_dir $DOWNLOAD_DIR
 elif [ $RUN_MODE == "eval" ]
 then
-    python $(dirname "$0")/src/eval.py --model_name $MODEL_NAME \
-                                       --data_name $DATA_NAME \
-                                       --model_dir $MODEL_DIR \
-                                       --data_dir $DATA_DIR
+    python -m src.eval --model_name $MODEL_NAME \
+                       --data_name $DATA_NAME \
+                       --model_dir $MODEL_DIR \
+                       --data_dir $DATA_DIR
 else
     echo "Invalid run mode `$RUN_MODE`."
 fi

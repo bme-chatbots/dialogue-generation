@@ -18,12 +18,12 @@ import os
 
 import numpy as np
 
-from model import (
+from src.model import (
     compute_size,
     create_model,
     setup_model_args)
 
-from data import (
+from src.data import (
     create_dataset,
     setup_data_args)
 
