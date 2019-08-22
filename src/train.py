@@ -57,62 +57,52 @@ from os.path import (
     exists, join)
 
 
-def setup_train_args():
+def setup_train_args(parser):
     """
     Sets up the training arguments.
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
+    group = parser.add_argument_group('train')
+    group.add_argument(
         '--max_epochs',
         type=int,
         default=15,
         help='Maximum number of epochs for training.')
-    parser.add_argument(
+    group.add_argument(
         '--cuda',
         type=bool,
         default=torch.cuda.is_available(),
         help='Device for training.')
     # TODO XLNet produces NaN with apex
-    parser.add_argument(
+    group.add_argument(
         '--mixed',
         type=bool,
         default=APEX_INSTALLED,
         help='Use mixed precision training.')
-    parser.add_argument(
+    group.add_argument(
         '--learning_rate',
         type=float,
         default=1e-4,
         help='Learning rate for the model.')
-    parser.add_argument(
+    group.add_argument(
         '--batch_size',
         type=int,
         default=64,
         help='Batch size during training.')
-    parser.add_argument(
+    group.add_argument(
         '--patience',
         type=int,
         default=5,
         help='Number of patience epochs before termination.')
-    parser.add_argument(
+    group.add_argument(
         '--grad_accum_steps',
         type=int,
         default=2,
         help='Number of steps for grad accum.')
-    parser.add_argument(
+    group.add_argument(
         '--eval_every_step',
         type=int,
         default=3000,
         help='Evaluation frequency in steps.')
-    parser.add_argument(
-        '--local_rank',
-        type=int,
-        default=-1,
-        help='Local rank for distributed training.')
-
-    setup_data_args(parser)
-    setup_model_args(parser)
-
-    return parser.parse_args()
 
 
 def load_state(model_dir, model, optimizer, logger, 
@@ -127,8 +117,10 @@ def load_state(model_dir, model, optimizer, logger,
 
         model.load_state_dict(state_dict['model'])
         optimizer.load_state_dict(state_dict['optimizer'])
-        logger.info('Loading model from {}'.format(
-            model_path))
+
+        if logger is not None:
+            logger.info('Loading model from {}'.format(
+                model_path))
 
         return (
             state_dict['val_loss'],
@@ -156,6 +148,7 @@ def create_logger(args):
     # setting up logging to the console
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
     logger.addHandler(console_handler)
 
     # setting up logging to a file
@@ -229,20 +222,21 @@ def compute_loss(outputs, targets, ignore_idx):
     return loss, accuracy
 
 
-def main():
+def main(rank, args):
     """
     Performs training, validation and testing.
     """
-    args = setup_train_args()
-    master_process = args.local_rank in [0, -1]
+    master_process = rank in [0, -1]
 
     model_dir = join(args.model_dir, args.model_name)
 
-    if args.local_rank != -1 and args.cuda:
+    if args.distributed:
         # use distributed training if local rank is given
         # and GPU training is requested
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device('cuda', args.local_rank)
+        os.environ['RANK'] = str(rank)
+
+        torch.cuda.set_device(rank)
+        device = torch.device('cuda', rank)
 
         torch.distributed.init_process_group(
             backend='nccl', init_method='env://')
@@ -271,29 +265,32 @@ def main():
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())
 
-    writer = SummaryWriter(
-        logdir=model_dir,
-        flush_secs=100)
+    if master_process:
+        writer = SummaryWriter(
+            logdir=model_dir,
+            flush_secs=100)
 
-    logger = create_logger(args=args)
+        logger = create_logger(args=args)
+    
+    else:
+        logger = None
 
     # loading previous state of the training
     best_val_loss, init_epoch, step = load_state(
         model_dir=model_dir, model=model, 
-        optimizer=optimizer, logger=logger, 
+        optimizer=optimizer, logger=logger,
         device=device)
 
     if args.mixed and args.cuda:
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
-    if args.local_rank != -1:
+    if args.distributed:
         model = DistributedDataParallel(
-            model, device_ids=[args.local_rank], 
-            output_device=args.local_rank)
+            model, device_ids=[rank], 
+            output_device=rank)
 
-    world_size = 1 if not args.cuda \
-        else torch.cuda.device_count()
+    world_size = max(args.num_devices, 1)
 
     train, valid, test = [
         (split, ceil(
@@ -305,7 +302,7 @@ def main():
     valid_dataset, num_valid_steps = valid
     test_dataset, num_test_steps = test
 
-    patience = 0
+    patience, skip = 0, 0
 
     def forward_step(batch):
         """
@@ -332,15 +329,18 @@ def main():
         """
         Performs a single step of training.
         """
-        nonlocal step
+        nonlocal step, skip
 
         loss, accuracy = forward_step(batch)
 
         if torch.isnan(loss).item():
-            logger.warn('skipping step (nan)')
+            logger.debug('skipping step (nan)')
             # returning None values when a NaN loss
             # is encountered and skipping backprop
             # so model grads will not be corrupted
+
+            skip += 1
+
             return None, None
 
         loss /= args.grad_accum_steps
@@ -452,7 +452,7 @@ def main():
                     writer.add_scalar('train/acc', acc, step)
 
                 loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss, acc=acc))
+                    loss=loss, acc=acc, skip=skip))
 
                 if not step % args.eval_every_step:
                     with torch.no_grad():
@@ -487,6 +487,7 @@ def main():
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     logger.warn('skipping step (oom)')
+                    skip += 1
 
                 else:
                     raise RuntimeError(e)
@@ -512,7 +513,3 @@ def main():
     if master_process:
         logger.info('test loss: {:.4}'.format(
             test_loss))
-
-
-if __name__ == '__main__':
-    main()

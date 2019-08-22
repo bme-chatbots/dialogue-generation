@@ -55,27 +55,28 @@ def setup_data_args(parser):
     """
     Sets up the data arguments.
     """
-    parser.add_argument(
+    group = parser.add_argument_group('data')
+    group.add_argument(
         '--data_name',
         type=str,
         default='dailydialog',
         help='Name of the dataset to use.')
-    parser.add_argument(
+    group.add_argument(
         '--data_dir',
         type=str,
         default=join(abspath(dirname(__file__)), '..', 'data'),
         help='Path of the data root directory.')
-    parser.add_argument(
+    group.add_argument(
         '--download_dir',
         type=str,
         default=join(abspath(dirname(__file__)), '..', 'data'),
         help='Path of the download directory.')
-    parser.add_argument(
+    group.add_argument(
         '--file_size',
         type=int,
         default=100000,
         help='Max number of examples in a single file.')
-    parser.add_argument(
+    group.add_argument(
         '--max_hist',
         type=str,
         default=4,
@@ -428,7 +429,7 @@ def create_loader(args, filenames, tokenizer,
     # distributed training is used if the local
     # rank is not the default -1
     sampler_cls = DistributedSampler if \
-        args.local_rank != -1 else IndexSampler
+        args.distributed else IndexSampler
 
     bucket_sampler_cls = create_sampler_cls(
         sampler_cls=sampler_cls)
