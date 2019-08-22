@@ -296,8 +296,9 @@ class DialogDataset(Dataset):
         download_path = join(download_dir, cls.archive)
 
         if not exists(download_path):
-            print('Downloading dataset to {}'.format(
-                download_path))
+            if args.local_rank in [-1, 0]:
+                print('Downloading dataset to {}'.format(
+                    download_path))
 
             with requests.Session() as session:
                 response = session.get(
@@ -512,7 +513,7 @@ def create_tokenizer(args):
     return instance
 
 
-def create_dataset(args, device):
+def create_dataset(args):
     """
     Downloads the dataset, converts it to tokens and 
     returns iterators over the train and test splits.

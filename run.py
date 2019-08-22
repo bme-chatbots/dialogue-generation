@@ -22,7 +22,8 @@ from src.eval import (
     setup_eval_args)
 
 from src.data import (
-    setup_data_args)
+    setup_data_args,
+    create_dataset)
 
 from src.model import (
     setup_model_args)
@@ -62,6 +63,10 @@ def main():
     args.distributed = args.num_devices > 1 and args.cuda
 
     if args.mode == 'train':
+        # creating dataset so it will already be
+        # downloaded in case of multi gpu training
+        create_dataset(args)
+
         if args.distributed:
             world_size = str(args.num_devices)
 

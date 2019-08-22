@@ -45,6 +45,8 @@ from torch.nn.functional import (
     kl_div, log_softmax,
     nll_loss)
 
+from torch import multiprocessing as mp
+
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.utils import clip_grad_norm_
 from torch.nn.parallel import (
@@ -226,6 +228,8 @@ def main(rank, args):
     """
     Performs training, validation and testing.
     """
+    args.local_rank = rank
+
     master_process = rank in [0, -1]
 
     model_dir = join(args.model_dir, args.model_name)
@@ -247,9 +251,8 @@ def main(rank, args):
 
     # creating dataset and storing dataset splits
     # as individual variables for convenience
-    datasets, tokenizer = create_dataset(
-        args=args, device=device)
-
+    datasets, tokenizer = create_dataset(args=args)
+        
     pad_idx = tokenizer.convert_tokens_to_ids(
         tokenizer.pad_token)
     vocab_size = len(tokenizer)
@@ -486,7 +489,7 @@ def main(rank, args):
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    logger.warn('skipping step (oom)')
+                    logger.debug('skipping step (oom)')
                     skip += 1
 
                 else:
