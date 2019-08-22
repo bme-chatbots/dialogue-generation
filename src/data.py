@@ -305,10 +305,11 @@ class DialogDataset(Dataset):
                 # data is read in 2 ** 15 sized chunks
                 # NOTE this could be tuned to reveal
                 # data size in MBs
-                loop = response.iter_content(2 ** 15)
+                loop = response.iter_content(2 ** 20)
+                loop = tqdm(loop, unit='MB', unit_scale=True)
 
                 with open(download_path, 'wb') as f:
-                    for chunk in tqdm(loop):
+                    for chunk in loop:
                         if chunk:
                             f.write(chunk)
 

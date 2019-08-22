@@ -468,8 +468,7 @@ def main():
                             val_loss))
 
                         # logging to tensorboard    
-                        writer.add_scalar('val/loss', loss, step)
-                        writer.add_scalar('val/acc', acc, step)
+                        writer.add_scalar('val/loss', val_loss, step)
 
                     if val_loss < best_val_loss:
                         patience = 0

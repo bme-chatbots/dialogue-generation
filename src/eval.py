@@ -25,7 +25,7 @@ from model import (
     create_model,
     setup_model_args)
 
-from collate import PREPARE
+from src.collate import PREPARE
 
 from numpy import inf
 
@@ -209,7 +209,7 @@ def main():
         inputs = transform_dialog(
             history[:args.max_hist],
             special_ids=special_ids)
-        
+
         preds = decode(
             args=args, model=model,
             inputs=inputs, tokenizer=tokenizer,
