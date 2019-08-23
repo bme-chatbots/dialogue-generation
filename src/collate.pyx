@@ -122,8 +122,11 @@ def prepare_gpt2_inputs(input_ids, token_type_ids):
 
 
 PREPARE = {
-    'xlnet': prepare_xlnet_inputs,
-    'gpt2': prepare_gpt2_inputs
+    'xlnet-base-cased':     prepare_xlnet_inputs,
+    'xlnet-large-cased':    prepare_xlnet_inputs,
+    'gpt2':                 prepare_gpt2_inputs,
+    'gpt2-medium':          prepare_gpt2_inputs,
+    'gpt2-large':           prepare_gpt2_inputs
 }
 
 

@@ -82,7 +82,7 @@ def decode(args, model, inputs, tokenizer, select_fn,
         curr_token_type_ids = [token_type_ids + \
             [rsp_id] * len(preds)]
 
-        if args.model_name == 'xlnet':
+        if 'xlnet' in args.model_name:
             curr_input_ids.append(mask_id)
             curr_token_type_ids.append(rsp_id)
 
@@ -95,7 +95,7 @@ def decode(args, model, inputs, tokenizer, select_fn,
         logits = model(inputs)[0]
 
         # TODO find a better solution
-        if args.model_name == 'gpt2':
+        if 'gpt2' in args.model_name:
             logits = logits[0][-1]
 
         logits = logits.squeeze()

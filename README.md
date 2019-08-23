@@ -6,6 +6,16 @@ Implementation of a neural dialogue generator model with pretrained XLNet  *[Yan
 
 The model uses mixed precision training from nvidia/apex. Note that apex is not required and is only used if it is available. For installation guide of this module see the official [instructions](https://github.com/NVIDIA/apex).
 
+To train the model clone this repository and install dependecies. The project uses cython to assemble batches for faster input pipeline.
+
+```console
+pip install -r requirements.txt
+
+python setup.py build_ext --inplace
+
+python run.py
+```
+
 The model can be trained with the following commands. Note that `<data_dir>` and `<model_dir>` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. Training with different hyperparameters can be done by running the `train.py` script and passing the desired options as command line arguments.
 
 ```console
