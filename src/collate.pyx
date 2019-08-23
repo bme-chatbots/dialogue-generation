@@ -97,8 +97,11 @@ def gpt2_padded_collate(vector[vector[vector[int]]] examples):
 
 
 COLLATE = {
-    'xlnet': xlnet_padded_collate,
-    'gpt2': gpt2_padded_collate
+    'xlnet-base-cased':     xlnet_padded_collate,
+    'xlnet-large-cased':    xlnet_padded_collate,
+    'gpt2':                 gpt2_padded_collate,
+    'gpt2-medium':          gpt2_padded_collate,
+    'gpt2-large':           gpt2_padded_collate
 }
 
 

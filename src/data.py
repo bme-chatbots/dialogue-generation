@@ -470,8 +470,11 @@ def create_loader(args, filenames, tokenizer,
 
 
 TOKENIZER = {
-    'xlnet': XLNetTokenizer, 
-    'gpt2': GPT2Tokenizer
+    'xlnet-base-cased':     XLNetTokenizer,
+    'xlnet-large-cased':    XLNetTokenizer, 
+    'gpt2':                 GPT2Tokenizer,
+    'gpt2-medium':          GPT2Tokenizer,
+    'gpt2-large':           GPT2Tokenizer
 }
 
 
@@ -482,16 +485,20 @@ def create_tokenizer(args):
     """
     data_dir = join(args.data_dir, args.data_name,
                     args.model_name)
-    tokenizer_path = join(data_dir, 'special_tokens_map.json')
+    tokenizer_path = join(
+        data_dir, 'special_tokens_map.json')
+
+    assert args.model_name in TOKENIZER, \
+        'Available tokenizers: {} received `{}`'.format(
+            ', '.join(TOKENIZER), args.model_name)
 
     tokenizer_cls = TOKENIZER[args.model_name]
-    model_cls = MODEL[args.model_name]
 
     if not exists(tokenizer_path):
         # TODO come up with better naming
         # for tokenizer `instance`
         instance = tokenizer_cls.from_pretrained(
-            model_cls.config)
+            args.model_name)
 
         # adding special tokens
         # TODO check compatibility with all tokenizers

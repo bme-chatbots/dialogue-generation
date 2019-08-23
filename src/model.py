@@ -41,7 +41,7 @@ def setup_model_args(parser):
     group.add_argument(
         '--model_name',
         type=str,
-        default='xlnet',
+        default='xlnet-base-cased',
         help='Name of the model.')
     group.add_argument(
         '--model_dir',
@@ -59,11 +59,16 @@ def create_model(args, vocab_size, device):
     os.makedirs(model_dir, exist_ok=True)
 
     model_path = join(model_dir, 'pytorch_model.bin')
+
+    assert args.model_name in MODEL, \
+        'Available models: {} received `{}`'.format(
+            ', '.join(MODEL), args.model_name)
+
     model_cls = MODEL[args.model_name]
 
     if not exists(model_path):
         generator = model_cls.from_pretrained(
-            model_cls.config)
+            args.model_name)
 
         generator.resize_token_embeddings(vocab_size)
         generator.save_pretrained(model_dir)
@@ -90,8 +95,6 @@ class XLNetGenerator(XLNetLMHeadModel):
     """
     Generator model based on XLNet language model.
     """
-
-    config = 'xlnet-base-cased'
     
     def resize_bias(self, new_num_tokens=None):
         """
@@ -140,8 +143,6 @@ class GPT2Generator(GPT2LMHeadModel):
     Generator model based on GPT2 language model.
     """
 
-    config = 'gpt2'
-
     def forward(self, inputs, targets=None):
         # converting the batch of inputs to torch tensor
         device = next(self.parameters()).device
@@ -162,6 +163,9 @@ class GPT2Generator(GPT2LMHeadModel):
 
 
 MODEL = {
-    'xlnet': XLNetGenerator, 
-    'gpt2': GPT2Generator
+    'xlnet-base-cased':     XLNetGenerator, 
+    'xlnet-large-cased':    XLNetGenerator, 
+    'gpt2':                 GPT2Generator,
+    'gpt2-medium':          GPT2Generator,
+    'gpt2-large':           GPT2Generator
 }

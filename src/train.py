@@ -227,8 +227,6 @@ def main(rank, args):
     """
     Performs training, validation and testing.
     """
-    args.local_rank = rank
-
     master_process = rank in [0, -1]
 
     model_dir = join(args.model_dir, args.model_name)

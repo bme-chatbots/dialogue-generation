@@ -78,7 +78,7 @@ def main():
             spawn(train, args=(args, ), nprocs=nprocs)
 
         else:
-            train(-1, args)
+            train(rank=-1, args=args)
 
     else:
         evaluate(args)

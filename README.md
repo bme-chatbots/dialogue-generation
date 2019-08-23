@@ -12,7 +12,7 @@ The model can be trained with the following commands. Note that `<data_dir>` and
 python run.py --mode train --data_name data_name --model_name model_name
 ```
 
-Available models are `xlnet` and `gpt2`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by switching the `train` to the `eval` flag.
+Available models are `xlnet-base-cased`, `xlnet-large-cased`, and `gpt2`, `gpt2-medium`, `gpt2-large`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by switching the `train` to the `eval` flag.
 
 ```console
 python run.py --mode eval --data_name data_name --model_name model_name
