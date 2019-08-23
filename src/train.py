@@ -120,9 +120,8 @@ def load_state(model_dir, model, optimizer, logger,
         model.load_state_dict(state_dict['model'])
         optimizer.load_state_dict(state_dict['optimizer'])
 
-        if logger is not None:
-            logger.info('Loading model from {}'.format(
-                model_path))
+        logger.info('Loading model from {}'.format(
+            model_path))
 
         return (
             state_dict['val_loss'],
@@ -273,10 +272,7 @@ def main(rank, args):
             logdir=model_dir,
             flush_secs=100)
 
-        logger = create_logger(args=args)
-    
-    else:
-        logger = None
+    logger = create_logger(args=args)
 
     # loading previous state of the training
     best_val_loss, init_epoch, step = load_state(
@@ -337,7 +333,8 @@ def main(rank, args):
         loss, accuracy = forward_step(batch)
 
         if torch.isnan(loss).item():
-            logger.debug('skipping step (nan)')
+            if master_process:
+                logger.debug('skipping step (nan)')
             # returning None values when a NaN loss
             # is encountered and skipping backprop
             # so model grads will not be corrupted
@@ -489,7 +486,9 @@ def main(rank, args):
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    logger.debug('skipping step (oom)')
+                    if master_process:
+                        logger.debug('skipping step (oom)')
+
                     skip += 1
 
                 else:

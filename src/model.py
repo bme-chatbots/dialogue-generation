@@ -117,7 +117,8 @@ class XLNetGenerator(XLNetLMHeadModel):
         device = next(self.parameters()).device
 
         inputs = [
-            torch.as_tensor(t).to(device, non_blocking=True) 
+            torch.as_tensor(t).to(
+                device, non_blocking=True) 
             for t in inputs
         ]
 
@@ -146,7 +147,8 @@ class GPT2Generator(GPT2LMHeadModel):
         device = next(self.parameters()).device
 
         inputs = [
-            torch.as_tensor(t).to(device, non_blocking=True) 
+            torch.as_tensor(t).to(
+                device, non_blocking=True) 
             for t in inputs
         ]
 
