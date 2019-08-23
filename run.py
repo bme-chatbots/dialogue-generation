@@ -65,7 +65,7 @@ def main():
     if args.mode == 'train':
         # creating dataset so it will already be
         # downloaded in case of multi gpu training
-        create_dataset(args)
+        create_dataset(args=args)
 
         if args.distributed:
             world_size = str(args.num_devices)
@@ -74,7 +74,7 @@ def main():
             os.environ['MASTER_ADDR'] = args.master_addr
             os.environ['MASTER_PORT'] = args.master_port
 
-            nprocs = int(world_size)
+            nprocs = args.num_devices
             spawn(train, args=(args, ), nprocs=nprocs)
 
         else:

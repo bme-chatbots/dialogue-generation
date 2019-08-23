@@ -539,8 +539,6 @@ def create_dataset(args):
         valid_files, valid_size = valid
         test_files, test_size = test
 
-        print('Saving metadata to {}'.format(
-            metadata_path))
         # save the location of the files in a metadata
         # json object and delete the file in case of
         # interrupt so it wont be left in corrupted state
@@ -555,8 +553,6 @@ def create_dataset(args):
                 shutil.rmtree(metadata_path)
 
     else:
-        print('Loading metadata from {}'.format(
-            metadata_path))
         with open(metadata_path, 'r') as fh:
             filenames = json.load(fh)
 
