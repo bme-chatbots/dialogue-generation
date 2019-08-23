@@ -37,18 +37,17 @@ def setup_model_args(parser):
     """
     Sets up the model arguments.
     """
-    parser.add_argument(
+    group = parser.add_argument_group('model')
+    group.add_argument(
         '--model_name',
         type=str,
         default='xlnet',
         help='Name of the model.')
-    parser.add_argument(
+    group.add_argument(
         '--model_dir',
         type=str,
-        default=join(
-            abspath(dirname(__file__)),
-            '..', 'model.{}'.format(
-                datetime.today().strftime('%j%H%m'))),
+        default=join(abspath(dirname(__file__)), 
+            '..', 'model'),
         help='Path of the model checkpoints.')
 
 
@@ -118,7 +117,8 @@ class XLNetGenerator(XLNetLMHeadModel):
         device = next(self.parameters()).device
 
         inputs = [
-            torch.as_tensor(t).to(device) 
+            torch.as_tensor(t).to(
+                device, non_blocking=True) 
             for t in inputs
         ]
 
@@ -147,7 +147,8 @@ class GPT2Generator(GPT2LMHeadModel):
         device = next(self.parameters()).device
 
         inputs = [
-            torch.as_tensor(t).to(device) 
+            torch.as_tensor(t).to(
+                device, non_blocking=True) 
             for t in inputs
         ]
 

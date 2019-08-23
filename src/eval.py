@@ -15,17 +15,17 @@ import torch
 
 from os.path import join
 
-from data import (
+from src.data import (
     setup_data_args,
     create_dataset,
     transform_dialog,
     RSP, SP1, SP2, HST)
 
-from model import (
+from src.model import (
     create_model,
     setup_model_args)
 
-from collate import PREPARE
+from src.collate import PREPARE
 
 from numpy import inf
 
@@ -33,46 +33,31 @@ from torch.nn.functional import (
     softmax)
 
 
-def setup_eval_args():
+def setup_eval_args(parser):
     """
     Sets up the arguments for evaluation.
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--cuda',
-        type=bool,
-        default=False,
-        help='Device for evaluation.')
-    parser.add_argument(
+    group = parser.add_argument_group('eval')
+    group.add_argument(
         '--method',
         type=str,
         default='nucleus',
         help='Decoding method to use.')
-    parser.add_argument(
+    group.add_argument(
         '--max_len',
         type=int,
         default=100,
         help='Maximum length of the decoded sequence.')
-    parser.add_argument(
+    group.add_argument(
         '--top_p',
         type=float,
         default=0.9,
         help='Top-p parameter for nucleus sampling.')
-    parser.add_argument(
+    group.add_argument(
         '--top_k',
         type=int,
         default=100,
         help='Top-k parameter for topk sampling.')
-    parser.add_argument(
-        '--local_rank',
-        type=int,
-        default=-1,
-        help='Rank for distributed training.')
-
-    setup_data_args(parser)
-    setup_model_args(parser)
-
-    return parser.parse_args()
 
 
 def decode(args, model, inputs, tokenizer, select_fn,
@@ -171,8 +156,7 @@ METHODS = {
 }
 
 
-def main():
-    args = setup_eval_args()
+def main(args):
     device = torch.device('cuda' if args.cuda else 'cpu')
 
     model_dir = join(args.model_dir, args.model_name)
@@ -209,7 +193,7 @@ def main():
         inputs = transform_dialog(
             history[:args.max_hist],
             special_ids=special_ids)
-        
+
         preds = decode(
             args=args, model=model,
             inputs=inputs, tokenizer=tokenizer,
@@ -233,7 +217,3 @@ def main():
 
         except KeyboardInterrupt:
             break
-
-
-if __name__ == '__main__':
-    main()

@@ -124,9 +124,9 @@ PREPARE = {
 }
 
 
-# @cython.boundscheck(False)
-# @cython.wraparound(False)
-# @cython.nonecheck(False)
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.nonecheck(False)
 cdef create_xlnet_train_batch(
         vector[vector[int]] input_ids, 
         vector[vector[int]] token_type_ids,
@@ -198,7 +198,7 @@ cdef create_xlnet_train_batch(
                 mask_size = utr_idx + 1 - seq_size
                 mask_size = int_max(mask_size, 0)
                 mask_size = utr_size - seq_size - mask_size
-                for idx in range(mask_size + diff_size):
+                for idx in range(mask_size + diff_size + 1):
                     perm_mask_view[
                         btc_idx, utr_idx, 
                         max_seq - idx - 1] = 1

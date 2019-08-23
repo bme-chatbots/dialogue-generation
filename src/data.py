@@ -35,8 +35,8 @@ from pytorch_transformers import (
     XLNetTokenizer,
     GPT2Tokenizer)
 
-from collate import COLLATE
-from model import MODEL
+from src.collate import COLLATE
+from src.model import MODEL
 
 from os.path import (
     exists, join,
@@ -55,27 +55,28 @@ def setup_data_args(parser):
     """
     Sets up the data arguments.
     """
-    parser.add_argument(
+    group = parser.add_argument_group('data')
+    group.add_argument(
         '--data_name',
         type=str,
         default='dailydialog',
         help='Name of the dataset to use.')
-    parser.add_argument(
+    group.add_argument(
         '--data_dir',
         type=str,
         default=join(abspath(dirname(__file__)), '..', 'data'),
         help='Path of the data root directory.')
-    parser.add_argument(
+    group.add_argument(
         '--download_dir',
         type=str,
         default=join(abspath(dirname(__file__)), '..', 'data'),
         help='Path of the download directory.')
-    parser.add_argument(
+    group.add_argument(
         '--file_size',
         type=int,
         default=100000,
         help='Max number of examples in a single file.')
-    parser.add_argument(
+    group.add_argument(
         '--max_hist',
         type=str,
         default=4,
@@ -295,8 +296,9 @@ class DialogDataset(Dataset):
         download_path = join(download_dir, cls.archive)
 
         if not exists(download_path):
-            print('Downloading dataset to {}'.format(
-                download_path))
+            if args.local_rank in [-1, 0]:
+                print('Downloading dataset to {}'.format(
+                    download_path))
 
             with requests.Session() as session:
                 response = session.get(
@@ -305,10 +307,11 @@ class DialogDataset(Dataset):
                 # data is read in 2 ** 15 sized chunks
                 # NOTE this could be tuned to reveal
                 # data size in MBs
-                loop = response.iter_content(2 ** 15)
+                loop = response.iter_content(2 ** 20)
+                loop = tqdm(loop, unit='MB', unit_scale=True)
 
                 with open(download_path, 'wb') as f:
-                    for chunk in tqdm(loop):
+                    for chunk in loop:
                         if chunk:
                             f.write(chunk)
 
@@ -427,7 +430,7 @@ def create_loader(args, filenames, tokenizer,
     # distributed training is used if the local
     # rank is not the default -1
     sampler_cls = DistributedSampler if \
-        args.local_rank != -1 else IndexSampler
+        args.distributed else IndexSampler
 
     bucket_sampler_cls = create_sampler_cls(
         sampler_cls=sampler_cls)
@@ -510,7 +513,7 @@ def create_tokenizer(args):
     return instance
 
 
-def create_dataset(args, device):
+def create_dataset(args):
     """
     Downloads the dataset, converts it to tokens and 
     returns iterators over the train and test splits.
@@ -536,8 +539,6 @@ def create_dataset(args, device):
         valid_files, valid_size = valid
         test_files, test_size = test
 
-        print('Saving metadata to {}'.format(
-            metadata_path))
         # save the location of the files in a metadata
         # json object and delete the file in case of
         # interrupt so it wont be left in corrupted state
@@ -552,8 +553,6 @@ def create_dataset(args, device):
                 shutil.rmtree(metadata_path)
 
     else:
-        print('Loading metadata from {}'.format(
-            metadata_path))
         with open(metadata_path, 'r') as fh:
             filenames = json.load(fh)
 
@@ -622,10 +621,10 @@ def create_sampler_cls(sampler_cls):
                 iterable=self.sorted,
                 group_size=self.bucket_size)
 
-            # NOTE shuffling groups should be
+            # TODO shuffling groups should be
             # deterministic with regards to epoch
             groups = list(groups)
-            # random.shuffle(groups)
+            random.shuffle(groups)
 
             for group in groups:
                 indices = list(generate_indices(group))

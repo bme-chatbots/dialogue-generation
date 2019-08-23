@@ -9,13 +9,13 @@ The model uses mixed precision training from nvidia/apex. Note that apex is not 
 The model can be trained with the following commands. Note that `<data_dir>` and `<model_dir>` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. Training with different hyperparameters can be done by running the `train.py` script and passing the desired options as command line arguments.
 
 ```console
-./run.sh -r train -d <data_name> -m <model_name>
+python run.py --mode train --data_name data_name --model_name model_name
 ```
 
 Available models are `xlnet` and `gpt2`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by switching the `train` to the `eval` flag.
 
 ```console
-./run.sh -r eval -d <data_name> -m <model_name>
+python run.py --mode eval --data_name data_name --model_name model_name
 ```
 
 Training the model is fast and easy on Google Colaboratory, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running the following line in a cell of your colab.
@@ -54,7 +54,7 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 The model can be trained then by simply running the `run.sh` script with the default parameters.
 
 ```bash
-!./dialogue-generation/run.sh
+!python run.py
 ```
 
 ## Results
