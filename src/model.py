@@ -91,6 +91,19 @@ def compute_size(model):
         p in model.parameters())
 
 
+def convert_to_float(tensor, half=False):
+    """
+    Converts the tensor to either float32
+    or float16 based on the parameter.
+    """
+    if half:
+        tensor = tensor.half()
+    else:
+        tensor = tensor.float()
+
+    return tensor
+
+
 class XLNetGenerator(XLNetLMHeadModel):
     """
     Generator model based on XLNet language model.
@@ -115,25 +128,35 @@ class XLNetGenerator(XLNetLMHeadModel):
         super().resize_token_embeddings(new_num_tokens)
         self.resize_bias(new_num_tokens)
 
-    def forward(self, inputs, targets=None):
+    def forward(self, inputs, half=False):
         # converting the batch of inputs to torch tensor
-        device = next(self.parameters()).device
+        parameter = next(self.parameters())
 
         inputs = [
             torch.as_tensor(t).to(
-                device, non_blocking=True) 
+                parameter.device, 
+                non_blocking=True) 
             for t in inputs
         ]
 
         input_ids, token_type_ids, attn_mask, \
             perm_mask, target_map = inputs
 
+        attn_mask = convert_to_float(
+            tensor=attn_mask, half=half)
+
+        perm_mask = convert_to_float(
+            tensor=perm_mask, half=half)
+
+        target_map = convert_to_float(
+            tensor=target_map, half=half)
+
         outputs = super().forward(
             input_ids=input_ids.long(),
             token_type_ids=token_type_ids.long(),
-            attention_mask=attn_mask.float(),
-            perm_mask=perm_mask.float(),
-            target_mapping=target_map.float())
+            attention_mask=attn_mask,
+            perm_mask=perm_mask,
+            target_mapping=target_map)
 
         return outputs
 
@@ -143,7 +166,7 @@ class GPT2Generator(GPT2LMHeadModel):
     Generator model based on GPT2 language model.
     """
 
-    def forward(self, inputs, targets=None):
+    def forward(self, inputs, half=False):
         # converting the batch of inputs to torch tensor
         device = next(self.parameters()).device
 

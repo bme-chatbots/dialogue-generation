@@ -10,6 +10,7 @@
 # pylint: disable=no-name-in-module
 # pylint: disable=no-member
 # pylint: disable=not-callable
+# pylint: disable=used-before-assignment
 
 import torch
 import argparse
@@ -33,6 +34,7 @@ from tqdm import tqdm
 from math import ceil
 from datetime import datetime
 from statistics import mean
+from functools import wraps
 
 try:
     from apex import amp
@@ -45,7 +47,8 @@ from torch.nn.functional import (
     kl_div, log_softmax,
     nll_loss)
 
-from torch import multiprocessing as mp
+from torch.distributed import (
+    all_reduce, reduce_op)
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.utils import clip_grad_norm_
@@ -215,7 +218,7 @@ def compute_loss(outputs, targets, ignore_idx):
     target_tokens = not_ignore.long().sum().item()
     
     correct = (targets_view == preds) * not_ignore
-    correct = correct.sum().item()
+    correct = correct.sum()
 
     accuracy = correct / target_tokens
     loss = loss / target_tokens
@@ -278,7 +281,9 @@ def main(rank, args):
         optimizer=optimizer, logger=logger,
         device=device)
 
-    if args.mixed and args.cuda:
+    mixed = args.mixed and args.cuda
+
+    if mixed:
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
@@ -299,7 +304,17 @@ def main(rank, args):
     valid_dataset, num_valid_steps = valid
     test_dataset, num_test_steps = test
 
-    patience, skip = 0, 0
+    patience, skip, loss, acc = 0, 0, 0, 0
+
+    def reduce_tensor(tensor):
+        """
+        Averages a tensor across gpus.
+        """
+        reduced = tensor.clone()
+        all_reduce(reduced, op=reduce_op.SUM)
+        reduced /= args.world_size
+
+        return reduced
 
     def forward_step(batch):
         """
@@ -307,21 +322,26 @@ def main(rank, args):
         """
         inputs, targets = batch
 
+        outputs = model(
+            inputs=inputs, 
+            half=mixed)
+
         # converting targets from ndarray
         targets = torch.as_tensor(targets)
         targets = targets.long().to(device)
-
-        outputs = model(
-            inputs=inputs,
-            targets=targets)
 
         loss, accuracy = compute_loss(
             outputs=outputs, 
             targets=targets,
             ignore_idx=pad_idx)
 
-        return loss, accuracy
+        if args.distributed:
+            # reducing accuracy accross devices 
+            # for more accurate logging
+            accuracy = reduce_tensor(accuracy)
 
+        return loss, accuracy.item()
+    
     def train_step(batch):
         """
         Performs a single step of training.
@@ -331,14 +351,11 @@ def main(rank, args):
         loss, accuracy = forward_step(batch)
 
         if torch.isnan(loss).item():
-            if master_process:
-                logger.debug('skipping step (nan)')
+            logger.debug('skipping step (nan)')
             # returning None values when a NaN loss
             # is encountered and skipping backprop
             # so model grads will not be corrupted
-
             skip += 1
-
             return None, None
 
         loss /= args.grad_accum_steps
@@ -349,8 +366,12 @@ def main(rank, args):
         step += 1
 
         if step % args.grad_accum_steps == 0:
-            optimizer.step()
-            optimizer.zero_grad()
+            update()
+
+        if args.distributed:
+            # reducing loss accross devices for
+            # more accurate logging
+            loss = reduce_tensor(loss)
 
         return loss.item(), accuracy
 
@@ -360,17 +381,24 @@ def main(rank, args):
         normal precision mode.
         """
         # cuda is required for mixed precision training.
-        if args.mixed and args.cuda:
+        if mixed:
             with amp.scale_loss(loss, optimizer) as scaled:
                 scaled.backward()
         else:
             loss.backward()
 
+    def update():
+        """
+        Updates the model parameters.
+        """
+        optimizer.step()
+        optimizer.zero_grad()
+
     def clip_grad_norm(max_norm):
         """
         Applies gradient clipping.
         """
-        if args.mixed and args.cuda:
+        if mixed:
             clip_grad_norm_(
                 amp.master_params(optimizer), max_norm)
         else:
@@ -449,9 +477,6 @@ def main(rank, args):
                     writer.add_scalar('train/loss', loss, step)
                     writer.add_scalar('train/acc', acc, step)
 
-                loop.set_postfix(ordered_dict=OrderedDict(
-                    loss=loss, acc=acc, skip=skip))
-
                 if not step % args.eval_every_step:
                     with torch.no_grad():
                         val_loss = mean(evaluate(
@@ -484,13 +509,14 @@ def main(rank, args):
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    if master_process:
-                        logger.debug('skipping step (oom)')
-
+                    logger.debug('skipping step (oom)')
                     skip += 1
 
                 else:
                     raise RuntimeError(e)
+
+            loop.set_postfix(ordered_dict=OrderedDict(
+                loss=loss, acc=acc, skip=skip))
 
         if len(train_loss) > 0:
             train_loss = mean(train_loss)
@@ -503,7 +529,8 @@ def main(rank, args):
 
         scheduler.step()
 
-    writer.close()
+    if master_process:
+        writer.close()
 
     with torch.no_grad():
         test_loss = mean(evaluate(
