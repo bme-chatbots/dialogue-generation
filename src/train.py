@@ -258,7 +258,7 @@ def main(rank, args):
     vocab_size = len(tokenizer)
 
     # TODO fix xlnet nan with mixed precision
-    if args.model_name == 'xlnet':
+    if 'xlnet' in args.model_name:
         args.mixed = False
 
     model = create_model(
