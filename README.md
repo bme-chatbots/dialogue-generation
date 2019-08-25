@@ -64,7 +64,7 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 The model can be trained then by simply running the `run.sh` script with the default parameters.
 
 ```bash
-!python run.py
+!python dialogue-generation/run.py
 ```
 
 ## Results

@@ -262,8 +262,8 @@ def main(rank, args):
         args.mixed = False
 
     model = create_model(
-        args=args, vocab_size=vocab_size, 
-        device=device)
+        args=args, vocab_size=vocab_size)
+    model = model.to(device)
 
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())

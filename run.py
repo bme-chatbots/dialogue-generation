@@ -26,7 +26,8 @@ from src.data import (
     create_dataset)
 
 from src.model import (
-    setup_model_args)
+    setup_model_args,
+    create_model)
 
 from torch.multiprocessing import spawn
 
@@ -65,8 +66,11 @@ def main():
     if args.mode == 'train':
         # creating dataset so it will already be
         # downloaded in case of multi gpu training
-        create_dataset(args=args)
+        _, tokenizer = create_dataset(args=args)
+        vocab_size = len(tokenizer)
 
+        create_model(args, vocab_size)
+        
         if args.distributed:
             world_size = str(args.num_devices)
 

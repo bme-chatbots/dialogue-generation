@@ -51,7 +51,7 @@ def setup_model_args(parser):
         help='Path of the model checkpoints.')
 
 
-def create_model(args, vocab_size, device):
+def create_model(args, vocab_size):
     """
     Creates the classifier and encoder model.
     """
@@ -76,8 +76,6 @@ def create_model(args, vocab_size, device):
     else:
         generator = model_cls.from_pretrained(
             model_dir)
-
-    generator = generator.to(device)
 
     return generator
 

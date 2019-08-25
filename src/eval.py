@@ -169,7 +169,9 @@ def main(args):
 
     vocab_size = len(tokenizer)
 
-    model = create_model(args, vocab_size, device)
+    model = create_model(args, vocab_size)
+    model = model.to(device)
+    
     model.load_state_dict(state_dict['model'])
     model.eval()
 
