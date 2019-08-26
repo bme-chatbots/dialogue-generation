@@ -215,13 +215,13 @@ def compute_loss(outputs, targets, ignore_idx):
     # computing accuracy without including the
     # values at the ignore indices
     not_ignore = targets_view.ne(ignore_idx)
-    target_tokens = not_ignore.long().sum().item()
+    num_targets = not_ignore.long().sum().item()
     
     correct = (targets_view == preds) * not_ignore
     correct = correct.sum()
 
-    accuracy = correct / target_tokens
-    loss = loss / target_tokens
+    accuracy = correct / num_targets
+    loss = loss / num_targets
 
     return loss, accuracy
 
@@ -312,7 +312,7 @@ def main(rank, args):
         """
         reduced = tensor.clone()
         all_reduce(reduced, op=reduce_op.SUM)
-        reduced /= args.world_size
+        reduced /= world_size
 
         return reduced
 
@@ -366,7 +366,8 @@ def main(rank, args):
         step += 1
 
         if step % args.grad_accum_steps == 0:
-            update()
+            optimizer.step()
+            optimizer.zero_grad()
 
         if args.distributed:
             # reducing loss accross devices for
@@ -386,13 +387,6 @@ def main(rank, args):
                 scaled.backward()
         else:
             loss.backward()
-
-    def update():
-        """
-        Updates the model parameters.
-        """
-        optimizer.step()
-        optimizer.zero_grad()
 
     def clip_grad_norm(max_norm):
         """
