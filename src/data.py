@@ -78,7 +78,7 @@ def setup_data_args(parser):
         help='Max number of examples in a single file.')
     group.add_argument(
         '--max_hist',
-        type=str,
+        type=int,
         default=4,
         help='Maximum number of turns in history.')
 
@@ -496,6 +496,7 @@ def create_tokenizer(args):
     if not exists(tokenizer_path):
         # TODO come up with better naming
         # for tokenizer `instance`
+        print(args.model_name)
         instance = tokenizer_cls.from_pretrained(
             args.model_name)
 
