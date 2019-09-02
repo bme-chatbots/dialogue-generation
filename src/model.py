@@ -39,7 +39,7 @@ def setup_model_args(parser):
     """
     group = parser.add_argument_group('model')
     group.add_argument(
-        '--model_name',
+        '-m', '--model',
         type=str,
         default='xlnet-base-cased',
         help='Name of the model.')
@@ -55,20 +55,20 @@ def create_model(args, vocab_size):
     """
     Creates the classifier and encoder model.
     """
-    model_dir = join(args.model_dir, args.model_name)
+    model_dir = join(args.model_dir, args.model)
     os.makedirs(model_dir, exist_ok=True)
 
     model_path = join(model_dir, 'pytorch_model.bin')
 
-    assert args.model_name in MODEL, \
+    assert args.model in MODEL, \
         'Available models: {} received `{}`'.format(
-            ', '.join(MODEL), args.model_name)
+            ', '.join(MODEL), args.model)
 
-    model_cls = MODEL[args.model_name]
+    model_cls = MODEL[args.model]
 
     if not exists(model_path):
         generator = model_cls.from_pretrained(
-            args.model_name)
+            args.model)
 
         generator.resize_token_embeddings(vocab_size)
         generator.save_pretrained(model_dir)

@@ -14,24 +14,24 @@ To train the model clone this repository and install dependecies. The project us
 pip install -r requirements.txt
 
 python setup.py build_ext --inplace
-
-python run.py
 ```
 
-The model can be trained with the following commands. Note that `<data_dir>` and `<model_dir>` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. Training with different hyperparameters can be done by running the `train.py` script and passing the desired options as command line arguments.
+The model can be trained with the following commands. Note that `<data_dir>` and `<model_dir>` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments.
 
 ```console
-python -m src.train --model_name model_name
+python -m src.train --model MODEL
 ```
 
+For distributed multi-gpu training the train script should be called like this.
+
 ```console
-python -m torch.distributed.launch --nproc_per_node=NUM_GPUS_YOU_HAVE src/train.py --model_name model_name
+python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --model MODEL
 ```
 
 Available models are `xlnet-base-cased`, `xlnet-large-cased`, and `gpt2`, `gpt2-medium`, `gpt2-large`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by running the `interact` script.
 
 ```console
-python -m src.interact --model_name model_name
+python -m src.interact --model MODEL
 ```
 
 Training the model is fast and easy on Google Colaboratory, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running the following line in a cell of your colab.

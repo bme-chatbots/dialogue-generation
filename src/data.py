@@ -57,7 +57,7 @@ def setup_data_args(parser):
     """
     group = parser.add_argument_group('data')
     group.add_argument(
-        '--data_name',
+        '-d', '--data',
         type=str,
         default='dailydialog',
         help='Name of the dataset to use.')
@@ -98,8 +98,8 @@ def save_examples(args, data_cls, data_path, tokenizer):
     file and serializes them.
     """
     name = basename(splitext(data_path)[0])
-    data_dir = join(args.data_dir, args.data_name,
-                    args.model_name)
+    data_dir = join(args.data_dir, args.data,
+                    args.model)
 
     # during data preprocessing the history 
     # and target utterances are saved only once
@@ -285,9 +285,9 @@ class DialogDataset(Dataset):
         dataset from parlai.
         """
         extract_dir = join(
-            args.data_dir, args.data_name)
+            args.data_dir, args.data)
         download_dir = join(
-            args.download_dir, args.data_name)
+            args.download_dir, args.data)
 
         os.makedirs(extract_dir, exist_ok=True)
         os.makedirs(download_dir, exist_ok=True)
@@ -434,7 +434,7 @@ def create_loader(args, filenames, tokenizer,
     bucket_sampler_cls = create_sampler_cls(
         sampler_cls=sampler_cls)
 
-    collate_fn = COLLATE[args.model_name]
+    collate_fn = COLLATE[args.model]
 
     def load_examples():
         """
@@ -482,23 +482,22 @@ def create_tokenizer(args):
     Creates the tokenizer for the model and saves
     it in the model data directory if it does not exist.
     """
-    data_dir = join(args.data_dir, args.data_name,
-                    args.model_name)
+    data_dir = join(args.data_dir, args.data,
+                    args.model)
     tokenizer_path = join(
         data_dir, 'special_tokens_map.json')
 
-    assert args.model_name in TOKENIZER, \
+    assert args.model in TOKENIZER, \
         'Available tokenizers: {} received `{}`'.format(
-            ', '.join(TOKENIZER), args.model_name)
+            ', '.join(TOKENIZER), args.model)
 
-    tokenizer_cls = TOKENIZER[args.model_name]
+    tokenizer_cls = TOKENIZER[args.model]
 
     if not exists(tokenizer_path):
         # TODO come up with better naming
         # for tokenizer `instance`
-        print(args.model_name)
         instance = tokenizer_cls.from_pretrained(
-            args.model_name)
+            args.model)
 
         # adding special tokens
         # TODO check compatibility with all tokenizers
@@ -525,8 +524,8 @@ def create_dataset(args):
     Downloads the dataset, converts it to tokens and 
     returns iterators over the train and test splits.
     """
-    data_dir = join(args.data_dir, args.data_name,
-                    args.model_name)
+    data_dir = join(args.data_dir, args.data,
+                    args.model)
     os.makedirs(data_dir, exist_ok=True)
 
     metadata_path = join(data_dir, 'metadata.json')
@@ -651,7 +650,7 @@ def create_data_cls(args):
     data name and model name.
     """
     data_classes = DialogDataset.subclasses()
-    data_cls = data_classes[args.data_name]
+    data_cls = data_classes[args.data]
 
     return data_cls
 

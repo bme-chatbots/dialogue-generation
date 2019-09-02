@@ -163,7 +163,7 @@ def create_logger(args):
     Creates a logger that outputs information to a
     file and the standard output as well.
     """
-    model_dir = join(args.model_dir, args.model_name)
+    model_dir = join(args.model_dir, args.model)
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
@@ -257,7 +257,7 @@ def main():
     master_process = args.local_rank in [0, -1]
     args.distributed = args.local_rank > 0
 
-    model_dir = join(args.model_dir, args.model_name)
+    model_dir = join(args.model_dir, args.model)
 
     if args.distributed:
         # use distributed training if local rank is given
@@ -283,7 +283,7 @@ def main():
     vocab_size = len(tokenizer)
 
     # TODO fix xlnet nan with mixed precision
-    if 'xlnet' in args.model_name:
+    if 'xlnet' in args.model:
         args.mixed = False
 
     model = create_model(
