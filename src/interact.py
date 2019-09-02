@@ -33,16 +33,22 @@ from torch.nn.functional import (
     softmax)
 
 
-def setup_eval_args(parser):
+def setup_interact_args():
     """
     Sets up the arguments for evaluation.
     """
-    group = parser.add_argument_group('eval')
+    parser = argparse.ArgumentParser()
+    group = parser.add_argument_group('interact')
     group.add_argument(
         '--method',
         type=str,
         default='nucleus',
         help='Decoding method to use.')
+    group.add_argument(
+        '--cuda',
+        type=bool,
+        default=torch.cuda.is_available(),
+        help='Device for training.')
     group.add_argument(
         '--max_len',
         type=int,
@@ -58,6 +64,11 @@ def setup_eval_args(parser):
         type=int,
         default=100,
         help='Top-k parameter for topk sampling.')
+
+    setup_data_args(parser)
+    setup_model_args(parser)
+
+    return parser.parse_args()
 
 
 def decode(args, model, inputs, tokenizer, select_fn,
@@ -156,8 +167,12 @@ METHODS = {
 }
 
 
-def main(args):
-    device = torch.device('cuda' if args.cuda else 'cpu')
+def main():
+    args = setup_interact_args()
+    args.distributed = False
+
+    device = torch.device(
+        'cuda' if args.cuda else 'cpu')
 
     model_dir = join(args.model_dir, args.model_name)
 
@@ -218,3 +233,7 @@ def main(args):
 
         except KeyboardInterrupt:
             break
+
+
+if __name__ == '__main__':
+    main()

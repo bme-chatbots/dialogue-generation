@@ -62,10 +62,11 @@ from os.path import (
     exists, join)
 
 
-def setup_train_args(parser):
+def setup_train_args():
     """
     Sets up the training arguments.
     """
+    parser = argparse.ArgumentParser()
     group = parser.add_argument_group('train')
     group.add_argument(
         '--max_epochs',
@@ -108,6 +109,27 @@ def setup_train_args(parser):
         type=int,
         default=3000,
         help='Evaluation frequency in steps.')
+    group.add_argument(
+        '--local_rank',
+        type=int,
+        default=-1,
+        help='Local rank for the script.')
+
+    setup_data_args(parser)
+    setup_model_args(parser)
+
+    return parser.parse_args()
+
+
+def neginf(dtype):
+    """
+    Return a representable finite number near 
+    -inf for a dtype.
+    """
+    if dtype is torch.float16:
+        return -65504
+    else:
+        return -1e20
 
 
 def load_state(model_dir, model, optimizer, logger, 
@@ -216,7 +238,7 @@ def compute_loss(outputs, targets, ignore_idx):
     # values at the ignore indices
     not_ignore = targets_view.ne(ignore_idx)
     num_targets = not_ignore.long().sum().item()
-    
+
     correct = (targets_view == preds) * not_ignore
     correct = correct.sum()
 
@@ -226,24 +248,27 @@ def compute_loss(outputs, targets, ignore_idx):
     return loss, accuracy
 
 
-def main(rank, args):
+def main():
     """
     Performs training, validation and testing.
     """
-    master_process = rank in [0, -1]
+    args = setup_train_args()
+
+    master_process = args.local_rank in [0, -1]
+    args.distributed = args.local_rank > 0
 
     model_dir = join(args.model_dir, args.model_name)
 
     if args.distributed:
         # use distributed training if local rank is given
         # and GPU training is requested
-        os.environ['RANK'] = str(rank)
-
-        torch.cuda.set_device(rank)
-        device = torch.device('cuda', rank)
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device('cuda', args.local_rank)
 
         torch.distributed.init_process_group(
-            backend='nccl', init_method='env://')
+            backend='nccl', 
+            init_method='env://',
+            rank=args.local_rank)
 
     else:
         device = torch.device(
@@ -289,10 +314,10 @@ def main(rank, args):
 
     if args.distributed:
         model = DistributedDataParallel(
-            model, device_ids=[rank], 
-            output_device=rank)
+            model, device_ids=[args.local_rank], 
+            output_device=args.local_rank)
 
-    world_size = max(args.num_devices, 1)
+    world_size = os.environ.get('WORLD_SIZE', 1)
 
     train, valid, test = [
         (split, ceil(
@@ -506,9 +531,6 @@ def main(rank, args):
                     logger.debug('skipping step (oom)')
                     skip += 1
 
-                else:
-                    raise RuntimeError(e)
-
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss, acc=acc, skip=skip))
 
@@ -534,3 +556,7 @@ def main(rank, args):
     if master_process:
         logger.info('test loss: {:.4}'.format(
             test_loss))
+
+
+if __name__ == '__main__':
+    main()
