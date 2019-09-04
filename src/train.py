@@ -48,7 +48,7 @@ from torch.nn.functional import (
     nll_loss)
 
 from torch.distributed import (
-    all_reduce, reduce_op)
+    all_reduce, ReduceOp)
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.utils import clip_grad_norm_
@@ -82,7 +82,7 @@ def setup_train_args():
     group.add_argument(
         '--mixed',
         type=bool,
-        default=APEX_INSTALLED,
+        default=True,
         help='Use mixed precision training.')
     group.add_argument(
         '--learning_rate',
@@ -239,8 +239,8 @@ def compute_loss(outputs, targets, ignore_idx):
     not_ignore = targets_view.ne(ignore_idx)
     num_targets = not_ignore.long().sum().item()
 
-    correct = (targets_view == preds) * not_ignore
-    correct = correct.sum()
+    correct = (targets_view == preds) & not_ignore
+    correct = correct.float().sum()
 
     accuracy = correct / num_targets
     loss = loss / num_targets
@@ -253,6 +253,8 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
+    args.mixed = args.mixed and APEX_INSTALLED \
+        and args.cuda
 
     master_process = args.local_rank in [0, -1]
     args.distributed = args.local_rank > 0
@@ -306,9 +308,7 @@ def main():
         optimizer=optimizer, logger=logger,
         device=device)
 
-    mixed = args.mixed and args.cuda
-
-    if mixed:
+    if args.mixed:
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
@@ -336,7 +336,7 @@ def main():
         Averages a tensor across gpus.
         """
         reduced = tensor.clone()
-        all_reduce(reduced, op=reduce_op.SUM)
+        all_reduce(reduced, op=ReduceOp.SUM)
         reduced /= world_size
 
         return reduced
@@ -349,7 +349,7 @@ def main():
 
         outputs = model(
             inputs=inputs, 
-            half=mixed)
+            half=args.mixed)
 
         # converting targets from ndarray
         targets = torch.as_tensor(targets)
@@ -407,7 +407,7 @@ def main():
         normal precision mode.
         """
         # cuda is required for mixed precision training.
-        if mixed:
+        if args.mixed:
             with amp.scale_loss(loss, optimizer) as scaled:
                 scaled.backward()
         else:
@@ -417,7 +417,7 @@ def main():
         """
         Applies gradient clipping.
         """
-        if mixed:
+        if args.mixed:
             clip_grad_norm_(
                 amp.master_params(optimizer), max_norm)
         else:

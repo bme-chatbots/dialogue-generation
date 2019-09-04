@@ -260,7 +260,7 @@ class FileDataset(Dataset):
         return len(self.filenames)
 
 
-class DialogDataset(Dataset):
+class Corpora(Dataset):
     """
     Fetches utterances from a list of examples.
     The examples are produced from subsets of dialogs.
@@ -649,13 +649,13 @@ def create_data_cls(args):
     Creates a data class based on the provided
     data name and model name.
     """
-    data_classes = DialogDataset.subclasses()
+    data_classes = Corpora.subclasses()
     data_cls = data_classes[args.data]
 
     return data_cls
 
 
-class DailyDialog(DialogDataset):
+class DailyDialog(Corpora):
     """
     The daily-dialog dataset from
     https://arxiv.org/pdf/1710.03957.pdf
@@ -682,7 +682,7 @@ class DailyDialog(DialogDataset):
                 yield [ex['text'] for ex in dialog]
 
 
-class PersonaChat(DialogDataset):
+class PersonaChat(Corpora):
     """
     """
 
@@ -693,7 +693,7 @@ class PersonaChat(DialogDataset):
         pass
 
 
-class CornellMovies(DialogDataset):
+class CornellMovies(Corpora):
     """
     """
 
@@ -704,7 +704,7 @@ class CornellMovies(DialogDataset):
         pass
 
 
-class OpenSubtitles(DialogDataset):
+class OpenSubtitles(Corpora):
     """
     """
 

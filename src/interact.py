@@ -93,11 +93,11 @@ def decode(args, model, inputs, tokenizer, select_fn,
         curr_token_type_ids = [token_type_ids + \
             [rsp_id] * len(preds)]
 
-        if 'xlnet' in args.model_name:
+        if 'xlnet' in args.model:
             curr_input_ids.append(mask_id)
             curr_token_type_ids.append(rsp_id)
 
-        inputs = PREPARE[args.model_name](
+        inputs = PREPARE[args.model](
             input_ids=curr_input_ids,
             token_type_ids=curr_token_type_ids)
 
@@ -106,7 +106,7 @@ def decode(args, model, inputs, tokenizer, select_fn,
         logits = model(inputs)[0]
 
         # TODO find a better solution
-        if 'gpt2' in args.model_name:
+        if 'gpt2' in args.model:
             logits = logits[0][-1]
 
         logits = logits.squeeze()
@@ -174,7 +174,7 @@ def main():
     device = torch.device(
         'cuda' if args.cuda else 'cpu')
 
-    model_dir = join(args.model_dir, args.model_name)
+    model_dir = join(args.model_dir, args.model)
 
     state_dict = torch.load(
         join(model_dir, 'model.pt'),
