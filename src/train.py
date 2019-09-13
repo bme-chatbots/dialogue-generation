@@ -453,7 +453,7 @@ def main():
         state = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'val_loss': val_loss,
+            'val_loss': best_val_loss,
             'epoch': epoch + 1,
             'step': step
         }
@@ -484,7 +484,7 @@ def main():
         train_loss = []
 
         model.train()
-
+        save_state()
         for batch in loop:
             try:
                 loss, acc = train_step(batch)

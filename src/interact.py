@@ -88,18 +88,18 @@ def decode(args, model, inputs, tokenizer, select_fn,
     preds = []
 
     for _ in range(args.max_len):
-        curr_input_ids = [input_ids + preds]
+        curr_input_ids = input_ids + preds
 
-        curr_token_type_ids = [token_type_ids + \
-            [rsp_id] * len(preds)]
+        curr_token_type_ids = token_type_ids + \
+            [rsp_id] * len(preds)
 
         if 'xlnet' in args.model:
             curr_input_ids.append(mask_id)
             curr_token_type_ids.append(rsp_id)
 
         inputs = PREPARE[args.model](
-            input_ids=curr_input_ids,
-            token_type_ids=curr_token_type_ids)
+            input_ids=[curr_input_ids],
+            token_type_ids=[curr_token_type_ids])
 
         # the first value of the output tuple from
         # the model is the next token logits tensor
