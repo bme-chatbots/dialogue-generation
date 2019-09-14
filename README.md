@@ -75,4 +75,33 @@ The model can be trained then by simply running the `run.sh` script with the def
 
 ## Results
 
-**Coming soon**
+These results are from `xlnet-base-cased` trained with default parameters for 14 epochs and **`--max_hist 1`** as training with longer context currently creates worse models ( *actively looking for solution* ).
+
+```text
+what is your name ?
+Susan Ann.
+
+
+how old are you ?
+about three and a half, right?
+
+
+where do you live ?
+in California.
+
+
+what is your favourite colour ?
+I like red, both in both of them!
+
+
+do you have a favourite movie ?
+sure. It was quite popular among children.
+
+
+what is the title of this movie ?
+it's called'Is it a new film '
+
+
+you are not funny
+I am not joking, but you deserve to change your mind.
+```

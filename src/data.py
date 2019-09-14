@@ -281,8 +281,7 @@ class Corpora(Dataset):
     @classmethod
     def download(cls, args):
         """
-        Downloads and extracts the daily dialog 
-        dataset from parlai.
+        Downloads and extracts the dataset.
         """
         extract_dir = join(
             args.data_dir, args.data)

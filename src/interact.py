@@ -207,9 +207,9 @@ def main():
         history.append(tokenizer.encode(text))
 
         inputs = transform_dialog(
-            history[:args.max_hist],
+            history[-args.max_hist:],
             special_ids=special_ids)
-
+        
         preds = decode(
             args=args, model=model,
             inputs=inputs, tokenizer=tokenizer,
