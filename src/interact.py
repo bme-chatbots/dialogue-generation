@@ -27,8 +27,6 @@ from src.model import (
 
 from src.collate import PREPARE
 
-from numpy import inf
-
 from torch.nn.functional import (
     softmax)
 
@@ -43,10 +41,11 @@ def setup_interact_args():
         '--method',
         type=str,
         default='nucleus',
+        choices=list(METHODS),
         help='Decoding method to use.')
     group.add_argument(
         '--cuda',
-        type=bool,
+        action='store_true',
         default=torch.cuda.is_available(),
         help='Device for training.')
     group.add_argument(
@@ -71,8 +70,8 @@ def setup_interact_args():
     return parser.parse_args()
 
 
-def decode(args, model, inputs, tokenizer, select_fn,
-           device):
+def decode(args, model, inputs, tokenizer, 
+           select_fn, device):
     """
     Applies decoding given a model and inputs.
     """
@@ -132,7 +131,7 @@ def select_topk(args, logits):
     """
     indices_to_remove = logits < \
         torch.topk(logits, args.top_k)[0][..., -1, None]
-    logits[indices_to_remove] = -inf
+    logits[indices_to_remove] = float('-inf')
 
     return logits
 
@@ -156,7 +155,7 @@ def select_nucleus(args, logits):
 
     indices_to_remove = \
         sorted_indices[sorted_indices_to_remove]
-    logits[indices_to_remove] = -inf
+    logits[indices_to_remove] = float('-inf')
 
     return logits
 
@@ -180,7 +179,8 @@ def main():
         join(model_dir, 'model.pt'),
         map_location=device)
 
-    _, tokenizer = create_dataset(args=args)
+    _, tokenizer = create_dataset(
+        args=args, master_process=True)
 
     vocab_size = len(tokenizer)
 

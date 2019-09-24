@@ -23,10 +23,13 @@ from itertools import (
 from math import ceil
 from copy import deepcopy
 from collections import namedtuple
+from tempfile import TemporaryFile
 
 from torch.utils.data import (
     Dataset, DataLoader,
     Sampler)
+
+from torch.distributed import barrier
 
 from torch.utils.data.distributed import (
     DistributedSampler)
@@ -60,16 +63,19 @@ def setup_data_args(parser):
         '-d', '--data',
         type=str,
         default='dailydialog',
+        choices=list(DialogDataset.subclasses()),
         help='Name of the dataset to use.')
     group.add_argument(
         '--data_dir',
         type=str,
-        default=join(abspath(dirname(__file__)), '..', 'data'),
+        default=join(abspath(
+            dirname(__file__)), '..', 'data'),
         help='Path of the data root directory.')
     group.add_argument(
         '--download_dir',
         type=str,
-        default=join(abspath(dirname(__file__)), '..', 'data'),
+        default=join(abspath(
+            dirname(__file__)), '..', 'data'),
         help='Path of the download directory.')
     group.add_argument(
         '--file_size',
@@ -91,13 +97,20 @@ def group_elements(iterable, group_size):
 
     return zip_longest(*groups)
 
+def generate_num_elements(iterable, num_elements):
+    """
+    Convenience function for generating `num_elements`
+    from an iterable.
+    """
+    for _, element in zip(range(num_elements), iterable):
+        yield element
 
-def save_examples(args, data_cls, data_path, tokenizer):
+
+def save_examples(args, content, name, tokenizer):
     """
     Creates numericalizes examples from a raw data
     file and serializes them.
     """
-    name = basename(splitext(data_path)[0])
     data_dir = join(args.data_dir, args.data,
                     args.model)
 
@@ -105,8 +118,7 @@ def save_examples(args, data_cls, data_path, tokenizer):
     # and target utterances are saved only once
     dialogs = generate_dialogs(
         args=args,
-        data_cls=data_cls,
-        data_path=data_path,
+        content=content,
         tokenizer=tokenizer)
 
     groups = group_elements(
@@ -153,7 +165,7 @@ def generate_examples(dialogs):
         yield dialog, indices
 
 
-def generate_dialogs(args, data_cls, data_path, tokenizer):
+def generate_dialogs(args, content, tokenizer):
     """
     Generates dialogs from the raw dailydialog file.
     """
@@ -177,15 +189,13 @@ def generate_dialogs(args, data_cls, data_path, tokenizer):
                         for i in hist_indices)
 
                 # `len(target_utr) + 1` because
-                # `eos_id` is not added yet and therefore it
-                # is not included in target length
+                # `eos_id` is not added yet and therefore 
+                # it is not included in target length
                 target_len = len(target_utr) + 1
                 example_len += target_len
 
                 yield (dialog_idx, begin_idx,
                        end_idx, example_len)
-
-    content = data_cls.read_file(data_path)
 
     for idx, dialog in tqdm(enumerate(content)):
         dialog = [tokenizer.encode(u) for u in dialog]
@@ -260,143 +270,6 @@ class FileDataset(Dataset):
         return len(self.filenames)
 
 
-class Corpora(Dataset):
-    """
-    Fetches utterances from a list of examples.
-    The examples are produced from subsets of dialogs.
-    """
-
-    # base url to download the data
-    url = ''
-
-    # name of the dataset
-    name = ''
-
-    # name of the downloaded archive
-    archive = ''
-
-    # list of the extracted filenames
-    files = []
-
-    @classmethod
-    def download(cls, args):
-        """
-        Downloads and extracts the dataset.
-        """
-        extract_dir = join(
-            args.data_dir, args.data)
-        download_dir = join(
-            args.download_dir, args.data)
-
-        os.makedirs(extract_dir, exist_ok=True)
-        os.makedirs(download_dir, exist_ok=True)
-
-        url = cls.url + cls.archive
-        download_path = join(download_dir, cls.archive)
-
-        if not exists(download_path):
-            print('Downloading dataset to {}'.format(
-                download_path))
-
-            with requests.Session() as session:
-                response = session.get(
-                    url, stream=True, timeout=5)
-
-                # data is read in 2 ** 15 sized chunks
-                # NOTE this could be tuned to reveal
-                # data size in MBs
-                loop = response.iter_content(2 ** 20)
-                loop = tqdm(loop, unit='MB', unit_scale=True)
-
-                with open(download_path, 'wb') as f:
-                    for chunk in loop:
-                        if chunk:
-                            f.write(chunk)
-
-        extracted = [
-            join(extract_dir, f) for f in cls.files]
-
-        if any(not exists(p) for p in extracted):
-            print('Extracting dataset to {}'.format(
-                extract_dir))
-            shutil.unpack_archive(
-                download_path, extract_dir)
-
-        return extracted
-
-    @classmethod
-    def transform(cls, args, files, tokenizer):
-        """
-        Transforms the dataset into numericalized
-        format and saves it in fragments.
-        """
-        print('Transforming dataset')
-
-        return [
-            save_examples(
-                args=args, 
-                data_cls=cls,
-                data_path=data_path, 
-                tokenizer=tokenizer)
-            for data_path in files
-        ]
-
-    @classmethod
-    def subclasses(cls):
-        """
-        Lists the available datasets.
-        """
-        def generate_subclasses(c):
-            for s in c.__subclasses__():
-                # recursively runs through the
-                # subclasses of dialog datasets
-                yield from generate_subclasses(s)
-                yield s
-
-        # filtering out possible duplicates
-        subclasses = set(generate_subclasses(cls))
-
-        return {s.name: s for s in subclasses}
-
-    def __init__(self, dialogs, indices, special_ids):
-        self.dialogs = dialogs
-        self.indices = indices
-        self.special_ids = special_ids
-
-    def __getitem__(self, idx):
-        dialog_idx, begin_idx, end_idx, seq_len = \
-            self.indices[idx]
-        dialog = self.dialogs[dialog_idx]
-
-        # the whole dialog is fetched and the
-        # `idx` element of indices array creates
-        # the example
-        eos_id = self.special_ids[3]
-        rsp_id = self.special_ids[5]
-
-        history = dialog[begin_idx:end_idx]
-        target = dialog[end_idx] + [eos_id]
-
-        inputs = transform_dialog(
-            history=history,
-            special_ids=self.special_ids)
-
-        input_ids, token_type_ids = inputs
-
-        input_ids.extend(target)
-        token_type_ids.extend([rsp_id] * len(target))
-
-        # returning nested lists for convenient
-        # parameter passing to collate_fn
-        return [
-            input_ids, token_type_ids, 
-            target, [seq_len]
-        ]
-
-    def __len__(self):
-        return len(self.indices)
-
-
 class IndexSampler(Sampler):
     """
     Dummy class for sampling indices in range
@@ -452,12 +325,13 @@ def create_loader(args, filenames, tokenizer,
             dialog_dataset = data_cls(
                 dialogs=dialogs,
                 indices=indices,
-                special_ids=special_ids)
+                special_ids=special_ids,
+                tokenizer=tokenizer)
 
             example_loader = DataLoader(
                 dialog_dataset,
                 batch_size=args.batch_size,
-                num_workers=4,
+                num_workers=1,
                 sampler=sampler,
                 pin_memory=True,
                 collate_fn=collate_fn)
@@ -495,30 +369,30 @@ def create_tokenizer(args):
     if not exists(tokenizer_path):
         # TODO come up with better naming
         # for tokenizer `instance`
-        instance = tokenizer_cls.from_pretrained(
+        tokenizer = tokenizer_cls.from_pretrained(
             args.model)
 
         # adding special tokens
         # TODO check compatibility with all tokenizers
         special_tokens = [SP1, SP2, HST, RSP]
-        instance.add_special_tokens({
+        tokenizer.add_special_tokens({
             'additional_special_tokens': special_tokens})
 
-        if instance.pad_token is None:
+        if tokenizer.pad_token is None:
             # GPT2 does not have a pad token
-            instance.add_special_tokens({
+            tokenizer.add_special_tokens({
                 'pad_token': PAD})
 
-        instance.save_pretrained(data_dir)
+        tokenizer.save_pretrained(data_dir)
 
     else:
-        instance = tokenizer_cls.from_pretrained(
+        tokenizer = tokenizer_cls.from_pretrained(
             data_dir)
 
-    return instance
+    return tokenizer
 
 
-def create_dataset(args):
+def create_dataset(args, master_process):
     """
     Downloads the dataset, converts it to tokens and 
     returns iterators over the train and test splits.
@@ -530,9 +404,10 @@ def create_dataset(args):
     metadata_path = join(data_dir, 'metadata.json')
 
     tokenizer = create_tokenizer(args)
-    data_cls = create_data_cls(args)
+    data_cls = create_data_cls(args)        
 
-    if not exists(metadata_path):
+    # only the master process will create the dataset
+    if not exists(metadata_path) and master_process:
         # if dataset does not exist then create it
         # downloading and tokenizing the raw files
         files = data_cls.download(args=args)
@@ -557,13 +432,17 @@ def create_dataset(args):
             except KeyboardInterrupt:
                 shutil.rmtree(metadata_path)
 
-    else:
-        with open(metadata_path, 'r') as fh:
-            filenames = json.load(fh)
+    if args.distributed:
+        # synchronizing processes before creating
+        # data loaders
+        barrier()
+    
+    with open(metadata_path, 'r') as fh:
+        filenames = json.load(fh)
 
-        train_files, train_size = filenames['train']
-        valid_files, valid_size = filenames['valid']
-        test_files, test_size = filenames['test']
+    train_files, train_size = filenames['train']
+    valid_files, valid_size = filenames['valid']
+    test_files, test_size = filenames['test']
 
     train_dataset = create_loader(
         args=args, 
@@ -648,13 +527,159 @@ def create_data_cls(args):
     Creates a data class based on the provided
     data name and model name.
     """
-    data_classes = Corpora.subclasses()
+    data_classes = DialogDataset.subclasses()
     data_cls = data_classes[args.data]
 
     return data_cls
 
 
-class DailyDialog(Corpora):
+class DialogDataset(Dataset):
+    """
+    Fetches utterances from a list of examples.
+    The examples are produced from subsets of dialogs.
+    """
+
+    # base url to download the data
+    url = ''
+
+    # name of the dataset
+    name = ''
+
+    # name of the downloaded archive
+    archive = ''
+
+    # list of the extracted filenames
+    files = []
+
+    @classmethod
+    def download(cls, args):
+        """
+        Downloads and extracts the dataset.
+        """
+        extract_dir = join(
+            args.data_dir, args.data)
+        download_dir = join(
+            args.download_dir, args.data)
+
+        os.makedirs(extract_dir, exist_ok=True)
+        os.makedirs(download_dir, exist_ok=True)
+
+        url = cls.url + cls.archive
+        download_path = join(
+            download_dir, cls.archive)
+
+        if not exists(download_path):
+            print('Downloading dataset to {}'.format(
+                download_path))
+
+            with requests.Session() as session:
+                response = session.get(
+                    url, stream=True, timeout=5)
+
+                # data is read in 2 ** 15 sized chunks
+                # NOTE this could be tuned to reveal
+                # data size in MBs
+                loop = response.iter_content(2 ** 20)
+                loop = tqdm(
+                    loop, unit='MB', unit_scale=True)
+
+                with open(download_path, 'wb') as f:
+                    for chunk in loop:
+                        if chunk:
+                            f.write(chunk)
+
+        extracted_files = cls.extract(
+            download_path=download_path, 
+            extract_dir=extract_dir)
+
+        return extracted_files
+
+    @classmethod
+    def read_file(cls, data_path):
+        raise NotImplementedError('Abstract method.')
+
+    @classmethod
+    def extract(cls, download_path, extract_dir):
+        raise NotImplementedError('Abstract method.')
+
+    @classmethod
+    def generate_splits(cls, files):
+        raise NotImplementedError('Abstract method.')
+
+    @classmethod
+    def transform(cls, args, files, tokenizer):
+        """
+        Transforms the dataset into numericalized
+        format and saves it in fragments.
+        """
+        print('Transforming dataset')
+
+        for content, name in cls.generate_splits(
+                files=files):
+            yield save_examples(
+                args=args, 
+                content=content,
+                name=name,
+                tokenizer=tokenizer)
+
+    @classmethod
+    def subclasses(cls):
+        """
+        Lists the available datasets.
+        """
+        def generate_subclasses(c):
+            for s in c.__subclasses__():
+                # recursively runs through the
+                # subclasses of dialog datasets
+                yield from generate_subclasses(s)
+                yield s
+
+        # filtering out possible duplicates
+        subclasses = set(generate_subclasses(cls))
+
+        return {s.name: s for s in subclasses}
+
+    def __init__(self, dialogs, indices, special_ids, tokenizer):
+        self.dialogs = dialogs
+        self.indices = indices
+        self.special_ids = special_ids
+        self.tokenizer = tokenizer
+
+    def __getitem__(self, idx):
+        dialog_idx, begin_idx, end_idx, seq_len = \
+            self.indices[idx]
+        dialog = self.dialogs[dialog_idx]
+
+        # the whole dialog is fetched and the
+        # `idx` element of indices array creates
+        # the example
+        eos_id = self.special_ids[3]
+        rsp_id = self.special_ids[5]
+
+        history = dialog[begin_idx:end_idx]
+        target = dialog[end_idx] + [eos_id]
+
+        inputs = transform_dialog(
+            history=history,
+            special_ids=self.special_ids)
+
+        input_ids, token_type_ids = inputs
+
+        input_ids.extend(target)
+        token_type_ids.extend([rsp_id] * len(target))
+
+        # returning nested lists for convenient
+        # parameter passing to collate_fn
+        return [
+            input_ids, token_type_ids, 
+            target, [seq_len]
+        ]
+
+    def __len__(self):
+        return len(self.indices)
+
+
+class DailyDialog(DialogDataset):
     """
     The daily-dialog dataset from
     https://arxiv.org/pdf/1710.03957.pdf
@@ -669,6 +694,30 @@ class DailyDialog(Corpora):
     files = ['train.json', 'valid.json', 'test.json']
 
     @classmethod
+    def extract(cls, download_path, extract_dir):
+        extracted_files = [
+            join(extract_dir, f) for f in cls.files]
+
+        if any(not exists(p) for p in extracted_files):
+            shutil.unpack_archive(
+                download_path, extract_dir)
+
+        return extracted_files
+
+    @classmethod
+    def generate_splits(cls, files):
+        """
+        Creates splits from the provided datafile.
+        """
+        # daily dialog data is already split into
+        # train valid and test split
+        for f in files:
+            yield (
+                cls.read_file(f),
+                basename(splitext(f)[0])
+            )
+
+    @classmethod
     def read_file(cls, data_path):
         """
         Reads the contents of a raw dailydialog file.
@@ -681,33 +730,74 @@ class DailyDialog(Corpora):
                 yield [ex['text'] for ex in dialog]
 
 
-class PersonaChat(Corpora):
+class PersonaChat(DialogDataset):
+    """
+    The dataset descrbied in
+    https://arxiv.org/pdf/1801.07243.pdf.
+    """
+
+    url = 'https://s3.amazonaws.com/datasets.huggingface.co/personachat/'
+
+    name = 'personachat'
+
+    archive = 'personachat_self_original.json'
+
+    # no compression is used in this dataset
+    files = None
+
+    @classmethod
+    def extract(cls, download_path, extract_dir):
+        return [join(extract_dir, cls.archive)]
+
+    @classmethod
+    def read_file(cls, data_path):
+        """
+        Reads the contents of a raw dailydialog file.
+        """
+        with open(data_path, 'r') as fh:
+            return json.load(fh)
+
+    @classmethod
+    def generate_splits(cls, files):
+        """
+        Creates splits from the provided datafile.
+        """
+        content = cls.read_file(files[0])
+
+        def generate_data(split):
+            # generating only the utterances from
+            # persona chat datafile
+            for dialog in split:
+                whole_dialog = dialog['utterances'][-1]
+                history = whole_dialog['history']
+                response = whole_dialog['candidates'][-1]
+                
+                # appending the response to the whole
+                yield history + [response]
+
+        return [
+            (generate_data(content['train']), 'train'), 
+            (generate_data(content['valid']), 'valid'),
+            (generate_data(content['valid']), 'test')
+        ]
+
+
+class CornellMovies(DialogDataset):
     """
     """
 
-    name = 'persona'
+    name = 'cornellmovies'
 
     @classmethod
     def transform(cls, args, tokenizer):
         pass
 
 
-class CornellMovies(Corpora):
+class OpenSubtitles(DialogDataset):
     """
     """
 
-    name = 'cornell'
-
-    @classmethod
-    def transform(cls, args, tokenizer):
-        pass
-
-
-class OpenSubtitles(Corpora):
-    """
-    """
-
-    name = 'subtitles'
+    name = 'opensubtitles'
 
     @classmethod
     def transform(cls, args, tokenizer):

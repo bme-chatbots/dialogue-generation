@@ -75,14 +75,13 @@ def setup_train_args():
         help='Maximum number of epochs for training.')
     group.add_argument(
         '--cuda',
-        type=bool,
+        action='store_true',
         default=torch.cuda.is_available(),
         help='Device for training.')
     # TODO XLNet produces NaN with apex
     group.add_argument(
         '--mixed',
-        type=bool,
-        default=True,
+        action='store_true',
         help='Use mixed precision training.')
     group.add_argument(
         '--learning_rate',
@@ -102,7 +101,7 @@ def setup_train_args():
     group.add_argument(
         '--grad_accum_steps',
         type=int,
-        default=2,
+        default=8,
         help='Number of steps for grad accum.')
     group.add_argument(
         '--eval_every_step',
@@ -119,17 +118,6 @@ def setup_train_args():
     setup_model_args(parser)
 
     return parser.parse_args()
-
-
-def neginf(dtype):
-    """
-    Return a representable finite number near 
-    -inf for a dtype.
-    """
-    if dtype is torch.float16:
-        return -65504
-    else:
-        return -1e20
 
 
 def load_state(model_dir, model, optimizer, logger, 
@@ -158,15 +146,13 @@ def load_state(model_dir, model, optimizer, logger,
         return np.inf, 0, 0
     
 
-def create_logger(args):
+def create_logger(model_dir):
     """
     Creates a logger that outputs information to a
     file and the standard output as well.
     """
-    model_dir = join(args.model_dir, args.model)
-
     logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s')
@@ -174,18 +160,15 @@ def create_logger(args):
     # setting up logging to the console
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
     logger.addHandler(console_handler)
 
     # setting up logging to a file
-    filename = '{date}.log'.format(
-        date=datetime.today().strftime(
-            '%m-%d-%H-%M'))
-
-    log_path = join(model_dir, filename)
+    log_path = join(model_dir, 'training.log')
     file_handler = logging.FileHandler(
         filename=log_path)
     file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.INFO)
     logger.addHandler(file_handler)
 
     return logger
@@ -253,13 +236,27 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
+
+    if args.name is None:
+        args.name = datetime.today().strftime(
+            '%y.%m.%d-%H:%M:%S')
+
+    model_dir = join(args.model_dir, args.model, 
+                     args.name)
+
+    os.makedirs(model_dir, exist_ok=True)
+
+    logger = create_logger(model_dir=model_dir)
+
+    if args.mixed and not APEX_INSTALLED:
+        logger.warn(
+            '--mixed passed but apex is not installed.')
+
     args.mixed = args.mixed and APEX_INSTALLED \
         and args.cuda
 
     master_process = args.local_rank in [0, -1]
     args.distributed = args.local_rank > 0
-
-    model_dir = join(args.model_dir, args.model)
 
     if args.distributed:
         # use distributed training if local rank is given
@@ -278,7 +275,8 @@ def main():
 
     # creating dataset and storing dataset splits
     # as individual variables for convenience
-    datasets, tokenizer = create_dataset(args=args)
+    datasets, tokenizer = create_dataset(
+        args=args, master_process=master_process)
         
     pad_idx = tokenizer.convert_tokens_to_ids(
         tokenizer.pad_token)
@@ -289,7 +287,9 @@ def main():
         args.mixed = False
 
     model = create_model(
-        args=args, vocab_size=vocab_size)
+        args=args, model_dir=model_dir,
+        vocab_size=vocab_size)
+
     model = model.to(device)
 
     optimizer = create_optimizer(
@@ -299,8 +299,6 @@ def main():
         writer = SummaryWriter(
             logdir=model_dir,
             flush_secs=100)
-
-    logger = create_logger(args=args)
 
     # loading previous state of the training
     best_val_loss, init_epoch, step = load_state(
@@ -422,7 +420,7 @@ def main():
                 amp.master_params(optimizer), max_norm)
         else:
             clip_grad_norm_(model.parameters(), max_norm)
-
+    
     def evaluate(dataset, num_steps):
         """
         Constructs a validation loader and evaluates
@@ -484,7 +482,7 @@ def main():
         train_loss = []
 
         model.train()
-        save_state()
+
         for batch in loop:
             try:
                 loss, acc = train_step(batch)
@@ -510,7 +508,8 @@ def main():
                             val_loss))
 
                         # logging to tensorboard    
-                        writer.add_scalar('val/loss', val_loss, step)
+                        writer.add_scalar(
+                            'val/loss', val_loss, step)
 
                     if val_loss < best_val_loss:
                         patience = 0
@@ -559,4 +558,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+        
+    except KeyboardInterrupt:
+        # exiting training with Ctrl + C
+        pass

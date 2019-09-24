@@ -42,7 +42,13 @@ def setup_model_args(parser):
         '-m', '--model',
         type=str,
         default='xlnet-base-cased',
+        choices=list(MODEL),
         help='Name of the model.')
+    group.add_argument(
+        '--name',
+        type=str,
+        default=None,
+        help='Sub-name of the model.')
     group.add_argument(
         '--model_dir',
         type=str,
@@ -51,33 +57,29 @@ def setup_model_args(parser):
         help='Path of the model checkpoints.')
 
 
-def create_model(args, vocab_size):
+def create_model(args, model_dir, vocab_size):
     """
     Creates the classifier and encoder model.
     """
-    model_dir = join(args.model_dir, args.model)
-    os.makedirs(model_dir, exist_ok=True)
+    pretrained_dir = join(args.model_dir, args.model)
 
-    model_path = join(model_dir, 'pytorch_model.bin')
-
-    assert args.model in MODEL, \
-        'Available models: {} received `{}`'.format(
-            ', '.join(MODEL), args.model)
+    model_path = join(
+        pretrained_dir, 'pytorch_model.bin')
 
     model_cls = MODEL[args.model]
 
     if not exists(model_path):
-        generator = model_cls.from_pretrained(
+        model = model_cls.from_pretrained(
             args.model)
 
-        generator.resize_token_embeddings(vocab_size)
-        generator.save_pretrained(model_dir)
+        model.resize_token_embeddings(vocab_size)
+        model.save_pretrained(pretrained_dir)
 
     else:
-        generator = model_cls.from_pretrained(
-            model_dir)
+        model = model_cls.from_pretrained(
+            pretrained_dir)
 
-    return generator
+    return model
 
 
 def compute_size(model):
@@ -94,12 +96,7 @@ def convert_to_float(tensor, half=False):
     Converts the tensor to either float32
     or float16 based on the parameter.
     """
-    if half:
-        tensor = tensor.half()
-    else:
-        tensor = tensor.float()
-
-    return tensor
+    return tensor.half() if half else tensor.float()
 
 
 class XLNetGenerator(XLNetLMHeadModel):
