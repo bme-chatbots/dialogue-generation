@@ -172,8 +172,12 @@ def main():
 
     device = torch.device(
         'cuda' if args.cuda else 'cpu')
+    
+    assert args.name is not None, \
+        '`--name` must be given'
 
-    model_dir = join(args.model_dir, args.model)
+    model_dir = join(args.model_dir, args.model, 
+                     args.name)
 
     state_dict = torch.load(
         join(model_dir, 'model.pt'),
@@ -184,7 +188,7 @@ def main():
 
     vocab_size = len(tokenizer)
 
-    model = create_model(args, vocab_size)
+    model = create_model(args, model_dir, vocab_size)
     model = model.to(device)
     
     model.load_state_dict(state_dict['model'])

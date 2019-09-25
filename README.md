@@ -16,10 +16,10 @@ pip install -r requirements.txt
 python setup.py build_ext --inplace
 ```
 
-The model can be trained with the following commands. Note that `<data_dir>` and `<model_dir>` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments.
+The model can be trained with the following commands. Note that `--data_dir` and `--model_dir` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. The exact path of the model is <model_dir>/<model>/<name> where the <name> subdirectory is given by the `--name` argument (DD:MM:YY-hh-mm-ss by default) contains the logs and training checkpoints for a particular run, while <model> contains the pretrained initial checkpoint of the model. This is useful if one would like to train a model on several datasets in a consecutive manner, which can be done by mainting the same `--name` argument and changing the `--data`.
 
 ```console
-python -m src.train --model MODEL
+python -m src.train --model MODEL --name XY
 ```
 
 For distributed multi-gpu training the train script should be called like this.
@@ -31,7 +31,7 @@ python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --mode
 Available models are `xlnet-base-cased`, `xlnet-large-cased`, and `gpt2`, `gpt2-medium`, `gpt2-large`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by running the `interact` script.
 
 ```console
-python -m src.interact --model MODEL
+python -m src.interact --model MODEL --name XY
 ```
 
 Training the model is fast and easy on Google Colaboratory, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running the following line in a cell of your colab.
@@ -75,7 +75,7 @@ The model can be trained then by simply running the `run.sh` script with the def
 
 ## Results
 
-These results are from `xlnet-base-cased` trained with default parameters for 14 epochs and **`--max_hist 1`** as training with longer context currently creates worse models ( *actively looking for solution* ).
+These results are from `xlnet-base-cased` trained with default parameters for 14 epochs and **`--max_hist 1`**. More evaluation results are coming soon.
 
 ```text
 what is your name ?
