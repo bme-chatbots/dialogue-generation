@@ -27,8 +27,7 @@ from src.model import (
 
 from src.collate import PREPARE
 
-from torch.nn.functional import (
-    softmax)
+from torch.nn.functional import softmax
 
 
 def setup_interact_args():
@@ -44,7 +43,7 @@ def setup_interact_args():
         choices=list(METHODS),
         help='Decoding method to use.')
     group.add_argument(
-        '--cuda',
+        '--no_cuda',
         action='store_true',
         default=torch.cuda.is_available(),
         help='Device for training.')

@@ -2,7 +2,7 @@
 
 *`Currently under development. Please feel free to contribute with either pull requests or by filling an issue.`*
 
-Implementation of a neural dialogue generator model with pretrained XLNet  *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* and GPT2 architecture *[Radford et al. (2019)](https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf)* on daily dialog dataset *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)* (additional datasets are coming soon). Top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)* are available as decoding techniques.
+Implementation of a neural dialogue generator model with pretrained XLNet  *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* and GPT2 architecture *[Radford et al. (2019)](https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf)* on currently three datasets: *Daily Dialog* dataset *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)* , *Persona-Chat* dataset *[Zhang et al. (2018)](https://arxiv.org/pdf/1801.07243.pdf)* and *TopicalChat* dataset *[Gopalakrishnan et al. (2019)](https://m.media-amazon.com/images/G/01/amazon.jobs/3079_Paper._CB1565131710_.pdf)*. Top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)* are available as decoding techniques.
 
 ## Usage
 
@@ -28,7 +28,7 @@ For distributed multi-gpu training the train script should be called like this.
 python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --model MODEL
 ```
 
-Available models are `xlnet-base-cased`, `xlnet-large-cased`, and `gpt2`, `gpt2-medium`, `gpt2-large`. Currently the only available dataset option is `dailydialog`. An interactive evaluation mode is available on the trained model by running the `interact` script.
+Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`**. An interactive evaluation mode is available on the trained model by running the `interact` script.
 
 ```console
 python -m src.interact --model MODEL --name XY

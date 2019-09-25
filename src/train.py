@@ -71,12 +71,11 @@ def setup_train_args():
     group.add_argument(
         '--max_epochs',
         type=int,
-        default=15,
+        default=25,
         help='Maximum number of epochs for training.')
     group.add_argument(
-        '--cuda',
+        '--no_cuda',
         action='store_true',
-        default=torch.cuda.is_available(),
         help='Device for training.')
     # TODO XLNet produces NaN with apex
     group.add_argument(
@@ -237,9 +236,8 @@ def main():
     """
     args = setup_train_args()
 
-    if args.name is None:
-        args.name = datetime.today().strftime(
-            '%y.%m.%d-%H:%M:%S')
+    args.cuda = torch.cuda.is_available() \
+        and not args.no_cuda
 
     model_dir = join(args.model_dir, args.model, 
                      args.name)

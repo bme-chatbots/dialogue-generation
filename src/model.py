@@ -47,8 +47,9 @@ def setup_model_args(parser):
     group.add_argument(
         '--name',
         type=str,
-        default=None,
-        help='Sub-name of the model.')
+        default=datetime.today().strftime(
+            '%y.%m.%d-%H:%M:%S'),
+        help='Name of the trained model instance.')
     group.add_argument(
         '--model_dir',
         type=str,

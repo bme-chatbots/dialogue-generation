@@ -325,8 +325,7 @@ def create_loader(args, filenames, tokenizer,
             dialog_dataset = data_cls(
                 dialogs=dialogs,
                 indices=indices,
-                special_ids=special_ids,
-                tokenizer=tokenizer)
+                special_ids=special_ids)
 
             example_loader = DataLoader(
                 dialog_dataset,
@@ -413,7 +412,8 @@ def create_dataset(args, master_process):
         files = data_cls.download(args=args)
 
         train, valid, test = data_cls.transform(
-            args=args, files=files, tokenizer=tokenizer)
+            args=args, files=files, 
+            tokenizer=tokenizer)
 
         train_files, train_size = train
         valid_files, valid_size = valid
@@ -546,7 +546,7 @@ class DialogDataset(Dataset):
     name = ''
 
     # name of the downloaded archive
-    archive = ''
+    archives = []
 
     # list of the extracted filenames
     files = []
@@ -564,33 +564,38 @@ class DialogDataset(Dataset):
         os.makedirs(extract_dir, exist_ok=True)
         os.makedirs(download_dir, exist_ok=True)
 
-        url = cls.url + cls.archive
-        download_path = join(
-            download_dir, cls.archive)
+        extracted_files = []
 
-        if not exists(download_path):
-            print('Downloading dataset to {}'.format(
-                download_path))
+        for archive in cls.archives:
+            url = cls.url + archive
 
-            with requests.Session() as session:
-                response = session.get(
-                    url, stream=True, timeout=5)
+            download_path = join(
+                download_dir, archive)
 
-                # data is read in 2 ** 15 sized chunks
-                # NOTE this could be tuned to reveal
-                # data size in MBs
-                loop = response.iter_content(2 ** 20)
-                loop = tqdm(
-                    loop, unit='MB', unit_scale=True)
+            if not exists(download_path):
+                print('Downloading dataset to {}'.format(
+                    download_path))
 
-                with open(download_path, 'wb') as f:
-                    for chunk in loop:
-                        if chunk:
-                            f.write(chunk)
+                with requests.Session() as session:
+                    response = session.get(
+                        url, stream=True, timeout=5)
 
-        extracted_files = cls.extract(
-            download_path=download_path, 
-            extract_dir=extract_dir)
+                    # data is read in 2 ** 15 sized chunks
+                    # NOTE this could be tuned to reveal
+                    # data size in MBs
+                    loop = response.iter_content(2 ** 20)
+                    loop = tqdm(
+                        loop, unit='MB', unit_scale=True)
+
+                    with open(download_path, 'wb') as f:
+                        for chunk in loop:
+                            if chunk:
+                                f.write(chunk)
+
+            extracted_files.extend(
+                cls.extract(
+                    download_path=download_path, 
+                    extract_dir=extract_dir))
 
         return extracted_files
 
@@ -639,11 +644,10 @@ class DialogDataset(Dataset):
 
         return {s.name: s for s in subclasses}
 
-    def __init__(self, dialogs, indices, special_ids, tokenizer):
+    def __init__(self, dialogs, indices, special_ids):
         self.dialogs = dialogs
         self.indices = indices
         self.special_ids = special_ids
-        self.tokenizer = tokenizer
 
     def __getitem__(self, idx):
         dialog_idx, begin_idx, end_idx, seq_len = \
@@ -689,7 +693,7 @@ class DailyDialog(DialogDataset):
 
     name = 'dailydialog'
 
-    archive = 'dailydialog.tar.gz'
+    archives = ['dailydialog.tar.gz']
 
     files = ['train.json', 'valid.json', 'test.json']
 
@@ -732,22 +736,22 @@ class DailyDialog(DialogDataset):
 
 class PersonaChat(DialogDataset):
     """
-    The dataset descrbied in
-    https://arxiv.org/pdf/1801.07243.pdf.
+    Persona chat dataset from
+    https://arxiv.org/pdf/1801.07243.pdf
     """
 
     url = 'https://s3.amazonaws.com/datasets.huggingface.co/personachat/'
 
     name = 'personachat'
 
-    archive = 'personachat_self_original.json'
+    archives = ['personachat_self_original.json']
 
     # no compression is used in this dataset
     files = None
 
     @classmethod
     def extract(cls, download_path, extract_dir):
-        return [join(extract_dir, cls.archive)]
+        return [join(extract_dir, cls.archives[0])]
 
     @classmethod
     def read_file(cls, data_path):
@@ -782,8 +786,72 @@ class PersonaChat(DialogDataset):
         ]
 
 
+class TopicalChat(DialogDataset):
+    """
+    Topical-Chat dataset from
+    https://github.com/alexa/alexa-prize-topical-chat-dataset
+    """
+
+    name = 'topicalchat'
+
+    url = 'https://raw.githubusercontent.com/alexa/alexa-prize-topical-chat-dataset/master/conversations/'
+
+    archives = [
+        'train.json',
+        'valid_rare.json', 'valid_freq.json',
+        'test_rare.json', 'test_freq.json'
+    ]
+
+    files = archives
+
+    @classmethod
+    def extract(cls, download_path, extract_dir):
+        return [join(
+            extract_dir, 
+            download_path.split('/')[-1])]
+
+    @classmethod
+    def read_file(cls, data_path):
+        """
+        Reads the contents of a raw dailydialog file.
+        """
+        with open(data_path, 'r') as fh:
+            return json.load(fh)
+
+    @classmethod
+    def generate_splits(cls, files):
+        """
+        Creates splits from the provided datafile.
+        """
+        files = [cls.read_file(f) for f in files]
+        
+        train, valid_rare, valid_freq, \
+            test_rare, test_freq = files
+
+        valid = {**valid_rare, **valid_freq}
+        test =  {**test_rare, **test_freq}
+            
+        def generate_data(split):
+            """
+            Generates data from dialog jsons.
+            """
+            for dialog in split:
+                content = split[dialog]['content']
+
+                # appending the response to the whole
+                yield [turn['message'] for turn in content]
+
+        return [
+            (generate_data(train), 'train'), 
+            (generate_data(valid), 'valid'),
+            (generate_data(test), 'test')
+        ]
+
+
 class CornellMovies(DialogDataset):
     """
+    Cornell movies dataset from
+    https://arxiv.org/pdf/1106.3077.pdf
     """
 
     name = 'cornellmovies'
