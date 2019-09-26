@@ -51,7 +51,7 @@ python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --mode
 Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`**. An interactive evaluation mode is available on the trained model by running the `interact` script.
 
 ```console
-python -m src.interact --model MODEL --name XY
+python -m src.interact --model gpt2-medium --name my_test_run
 ```
 
 Training the model is fast and easy on Google Colaboratory, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running the following line in a cell of your colab.

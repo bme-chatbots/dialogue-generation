@@ -321,7 +321,7 @@ def main():
             model, device_ids=[args.local_rank], 
             output_device=args.local_rank)
 
-    world_size = os.environ.get('WORLD_SIZE', 1)
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
 
     train, valid, test = [
         (split, ceil(
