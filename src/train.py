@@ -12,21 +12,13 @@
 # pylint: disable=not-callable
 # pylint: disable=used-before-assignment
 
+import sys
 import torch
 import argparse
 import logging
 import os
 
 import numpy as np
-
-from src.model import (
-    compute_size,
-    create_model,
-    setup_model_args)
-
-from src.data import (
-    create_dataset,
-    setup_data_args)
 
 from tensorboardX import SummaryWriter
 from collections import OrderedDict
@@ -59,7 +51,23 @@ from pytorch_transformers import (
     WarmupLinearSchedule, AdamW)
 
 from os.path import (
-    exists, join)
+    exists, join,
+    abspath, dirname)
+
+# HACK to enable launching with
+# python src/train.py
+PROJECT_PATH = join(abspath(dirname(__file__)), '..')
+if PROJECT_PATH not in sys.path:
+    sys.path.append(PROJECT_PATH)
+
+from src.model import (
+    compute_size,
+    create_model,
+    setup_model_args)
+
+from src.data import (
+    create_dataset,
+    setup_data_args)
 
 
 def setup_train_args():
