@@ -288,7 +288,7 @@ class IndexSampler(Sampler):
 
 
 def create_loader(args, filenames, tokenizer,
-                  data_cls, shuffle=False):
+                  dataset_cls, shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
@@ -322,7 +322,7 @@ def create_loader(args, filenames, tokenizer,
             sampler = bucket_sampler_cls(
                 indices, shuffle=shuffle)
 
-            dialog_dataset = data_cls(
+            dialog_dataset = dataset_cls(
                 dialogs=dialogs,
                 indices=indices,
                 special_ids=special_ids)
@@ -403,17 +403,16 @@ def create_dataset(args, master_process):
     metadata_path = join(data_dir, 'metadata.json')
 
     tokenizer = create_tokenizer(args)
-    data_cls = create_data_cls(args)        
+    dataset_cls = create_data_cls(args)        
 
     # only the master process will create the dataset
     if not exists(metadata_path) and master_process:
         # if dataset does not exist then create it
         # downloading and tokenizing the raw files
-        files = data_cls.download(args=args)
+        files = dataset_cls.download(args=args)
 
-        train, valid, test = data_cls.transform(
-            args=args, files=files, 
-            tokenizer=tokenizer)
+        train, valid, test = dataset_cls.transform(
+            args=args, files=files, tokenizer=tokenizer)
 
         train_files, train_size = train
         valid_files, valid_size = valid
@@ -448,20 +447,20 @@ def create_dataset(args, master_process):
         args=args, 
         filenames=train_files,
         tokenizer=tokenizer, 
-        data_cls=data_cls,
+        dataset_cls=dataset_cls,
         shuffle=True)
 
     valid_dataset = create_loader(
         args=args, 
         filenames=valid_files,
         tokenizer=tokenizer,
-        data_cls=data_cls)
+        dataset_cls=dataset_cls)
 
     test_dataset = create_loader(
         args=args, 
         filenames=test_files,
         tokenizer=tokenizer,
-        data_cls=data_cls)
+        dataset_cls=dataset_cls)
 
     train = train_dataset, train_size
     valid = valid_dataset, valid_size
@@ -533,6 +532,27 @@ def create_data_cls(args):
     return data_cls
 
 
+def download(download_path, url):
+    """
+    Downloads a file.
+    """
+    with requests.Session() as session:
+        response = session.get(
+            url, stream=True, timeout=5)
+
+        # data is read in 2 ** 15 sized chunks
+        # NOTE this could be tuned to reveal
+        # data size in MBs
+        loop = response.iter_content(2 ** 20)
+        loop = tqdm(
+            loop, unit='MB', unit_scale=True)
+
+        with open(download_path, 'wb') as f:
+            for chunk in loop:
+                if chunk:
+                    f.write(chunk)
+
+
 class DialogDataset(Dataset):
     """
     Fetches utterances from a list of examples.
@@ -545,6 +565,7 @@ class DialogDataset(Dataset):
     # name of the dataset
     name = ''
 
+    # TODO renames these attributes
     # name of the downloaded archive
     archives = []
 
@@ -573,24 +594,10 @@ class DialogDataset(Dataset):
                 download_dir, archive)
 
             if not exists(download_path):
-                print('Downloading dataset to {}'.format(
-                    download_path))
+                msg = 'Downloading dataset to {}'
+                print(msg.format(download_path))
 
-                with requests.Session() as session:
-                    response = session.get(
-                        url, stream=True, timeout=5)
-
-                    # data is read in 2 ** 15 sized chunks
-                    # NOTE this could be tuned to reveal
-                    # data size in MBs
-                    loop = response.iter_content(2 ** 20)
-                    loop = tqdm(
-                        loop, unit='MB', unit_scale=True)
-
-                    with open(download_path, 'wb') as f:
-                        for chunk in loop:
-                            if chunk:
-                                f.write(chunk)
+                download(download_path, url)
 
             extracted_files.extend(
                 cls.extract(
@@ -608,7 +615,7 @@ class DialogDataset(Dataset):
         raise NotImplementedError('Abstract method.')
 
     @classmethod
-    def generate_splits(cls, files):
+    def generate_splits(cls, extracted_files):
         raise NotImplementedError('Abstract method.')
 
     @classmethod
@@ -619,8 +626,7 @@ class DialogDataset(Dataset):
         """
         print('Transforming dataset')
 
-        for content, name in cls.generate_splits(
-                files=files):
+        for content, name in cls.generate_splits(files):
             yield save_examples(
                 args=args, 
                 content=content,
@@ -709,13 +715,13 @@ class DailyDialog(DialogDataset):
         return extracted_files
 
     @classmethod
-    def generate_splits(cls, files):
+    def generate_splits(cls, extracted_files):
         """
-        Creates splits from the provided datafile.
+        Creates splits from the extracted_files.
         """
         # daily dialog data is already split into
         # train valid and test split
-        for f in files:
+        for f in extracted_files:
             yield (
                 cls.read_file(f),
                 basename(splitext(f)[0])
@@ -756,19 +762,23 @@ class PersonaChat(DialogDataset):
     @classmethod
     def read_file(cls, data_path):
         """
-        Reads the contents of a raw dailydialog file.
+        Reads the contents of a raw file.
         """
         with open(data_path, 'r') as fh:
             return json.load(fh)
 
     @classmethod
-    def generate_splits(cls, files):
+    def generate_splits(cls, extracted_files):
         """
-        Creates splits from the provided datafile.
+        Creates splits from the extracted_files.
         """
-        content = cls.read_file(files[0])
+        content = cls.read_file(extracted_files[0])
 
-        def generate_data(split):
+        train = content['train']
+        valid = content['valid']
+        test = content['valid']
+
+        def generate_uttrs(split):
             # generating only the utterances from
             # persona chat datafile
             for dialog in split:
@@ -779,10 +789,12 @@ class PersonaChat(DialogDataset):
                 # appending the response to the whole
                 yield history + [response]
 
+        # TODO there is no test data for personachat
+        # create separate test data from validation
         return [
-            (generate_data(content['train']), 'train'), 
-            (generate_data(content['valid']), 'valid'),
-            (generate_data(content['valid']), 'test')
+            (generate_uttrs(train), 'train'), 
+            (generate_uttrs(valid), 'valid'),
+            (generate_uttrs(test), 'test')
         ]
 
 
@@ -813,25 +825,27 @@ class TopicalChat(DialogDataset):
     @classmethod
     def read_file(cls, data_path):
         """
-        Reads the contents of a raw dailydialog file.
+        Reads the contents of a raw file.
         """
         with open(data_path, 'r') as fh:
             return json.load(fh)
 
     @classmethod
-    def generate_splits(cls, files):
+    def generate_splits(cls, extracted_files):
         """
-        Creates splits from the provided datafile.
+        Creates splits from the extracted_files.
         """
-        files = [cls.read_file(f) for f in files]
+        files = [cls.read_file(f) for f in extracted_files]
         
         train, valid_rare, valid_freq, \
             test_rare, test_freq = files
 
+        # NOTE currently we are not dealing with
+        # frequent or rare elements so merging them
         valid = {**valid_rare, **valid_freq}
         test =  {**test_rare, **test_freq}
             
-        def generate_data(split):
+        def generate_uttrs(split):
             """
             Generates data from dialog jsons.
             """
@@ -842,9 +856,9 @@ class TopicalChat(DialogDataset):
                 yield [turn['message'] for turn in content]
 
         return [
-            (generate_data(train), 'train'), 
-            (generate_data(valid), 'valid'),
-            (generate_data(test), 'test')
+            (generate_uttrs(train), 'train'), 
+            (generate_uttrs(valid), 'valid'),
+            (generate_uttrs(test), 'test')
         ]
 
 
