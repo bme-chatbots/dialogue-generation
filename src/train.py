@@ -262,7 +262,7 @@ def main():
         and args.cuda
 
     master_process = args.local_rank in [0, -1]
-    args.distributed = args.local_rank > 0
+    args.distributed = args.local_rank != -1
 
     if args.distributed:
         # use distributed training if local rank is given

@@ -14,17 +14,7 @@ To train the model clone this repository and install dependecies. The project us
 git clone https://github.com/bme-chatbots/dialogue-generation.git
 
 cd dialogue-generation
-```
 
-*The next step is optional.*
-
-```console
-virtualenv venv
-
-source venv/bin/activate
-```
-
-```console
 pip install -r requirements.txt
 
 python setup.py build_ext --inplace
@@ -33,19 +23,13 @@ python setup.py build_ext --inplace
 The model can be trained with the following commands. Note that `--data_dir` and `--model_dir` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. The exact path of the model is `<model_dir>/<model>/<name>` where the name subdirectory is given by the `--name` argument (DD:MM:YY-hh-mm-ss by default) contains the logs and training checkpoints for a particular run, while `<model>` contains the pretrained initial checkpoint of the model. This is useful if one would like to train a model on several datasets in a consecutive manner, which can be done by mainting the same `--name` argument and changing the `--data`.
 
 ```console
-python -m src.train
-```
-
-*Also with specific model and dataset.*
-
-```console
 python -m src.train --model gpt2-medium --data personachat --name my_test_run
 ```
 
 For distributed multi-gpu training the train script should be called like this.
 
 ```console
-python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --model gpt2 --name my_distributed_run
+python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --model gpt2
 ```
 
 Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`**. An interactive evaluation mode is available on the trained model by running the `interact` script.
