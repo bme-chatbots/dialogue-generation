@@ -12,6 +12,16 @@
 # pylint: disable=not-callable
 # pylint: disable=used-before-assignment
 
+from src.data import (
+    create_dataset,
+    setup_data_args,
+    create_dummy_batch)
+
+from src.model import (
+    compute_size,
+    create_model,
+    setup_model_args)
+
 import sys
 import torch
 import argparse
@@ -59,15 +69,6 @@ from os.path import (
 PROJECT_PATH = join(abspath(dirname(__file__)), '..')
 if PROJECT_PATH not in sys.path:
     sys.path.append(PROJECT_PATH)
-
-from src.model import (
-    compute_size,
-    create_model,
-    setup_model_args)
-
-from src.data import (
-    create_dataset,
-    setup_data_args)
 
 
 def setup_train_args():
@@ -127,7 +128,7 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def load_state(model_dir, model, optimizer, logger, 
+def load_state(model_dir, model, optimizer, logger,
                device):
     """
     Loads the model and optimizer state.
@@ -151,7 +152,7 @@ def load_state(model_dir, model, optimizer, logger,
 
     except FileNotFoundError:
         return np.inf, 0, 0
-    
+
 
 def create_logger(model_dir):
     """
@@ -186,8 +187,8 @@ def create_optimizer(args, parameters):
     Creates an adam optimizer.
     """
     optimizer = AdamW(
-        lr=args.learning_rate, 
-        params=parameters, 
+        lr=args.learning_rate,
+        params=parameters,
         weight_decay=1e-6)
 
     return optimizer
@@ -218,7 +219,7 @@ def compute_loss(outputs, targets, ignore_idx):
     log_probs = log_softmax(logits_view, dim=-1)
 
     loss = nll_loss(
-        log_probs, targets_view, 
+        log_probs, targets_view,
         ignore_index=ignore_idx,
         reduction='sum')
 
@@ -247,7 +248,7 @@ def main():
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
 
-    model_dir = join(args.model_dir, args.model, 
+    model_dir = join(args.model_dir, args.model,
                      args.name)
 
     os.makedirs(model_dir, exist_ok=True)
@@ -271,7 +272,7 @@ def main():
         device = torch.device('cuda', args.local_rank)
 
         torch.distributed.init_process_group(
-            backend='nccl', 
+            backend='nccl',
             init_method='env://',
             rank=args.local_rank)
 
@@ -283,7 +284,7 @@ def main():
     # as individual variables for convenience
     datasets, tokenizer = create_dataset(
         args=args, master_process=master_process)
-        
+
     pad_idx = tokenizer.convert_tokens_to_ids(
         tokenizer.pad_token)
     vocab_size = len(tokenizer)
@@ -308,7 +309,7 @@ def main():
 
     # loading previous state of the training
     best_val_loss, init_epoch, step = load_state(
-        model_dir=model_dir, model=model, 
+        model_dir=model_dir, model=model,
         optimizer=optimizer, logger=logger,
         device=device)
 
@@ -318,14 +319,14 @@ def main():
 
     if args.distributed:
         model = DistributedDataParallel(
-            model, device_ids=[args.local_rank], 
+            model, device_ids=[args.local_rank],
             output_device=args.local_rank)
 
     world_size = int(os.environ.get('WORLD_SIZE', 1))
 
     train, valid, test = [
         (split, ceil(
-            size / args.batch_size / world_size)) 
+            size / args.batch_size / world_size))
         for split, size in datasets]
 
     # computing the sizes of the dataset splits
@@ -352,7 +353,7 @@ def main():
         inputs, targets = batch
 
         outputs = model(
-            inputs=inputs, 
+            inputs=inputs,
             half=args.mixed)
 
         # converting targets from ndarray
@@ -360,17 +361,17 @@ def main():
         targets = targets.long().to(device)
 
         loss, accuracy = compute_loss(
-            outputs=outputs, 
+            outputs=outputs,
             targets=targets,
             ignore_idx=pad_idx)
 
         if args.distributed:
-            # reducing accuracy accross devices 
+            # reducing accuracy accross devices
             # for more accurate logging
             accuracy = reduce_tensor(accuracy)
 
         return loss, accuracy.item()
-    
+
     def train_step(batch):
         """
         Performs a single step of training.
@@ -426,14 +427,14 @@ def main():
                 amp.master_params(optimizer), max_norm)
         else:
             clip_grad_norm_(model.parameters(), max_norm)
-    
+
     def evaluate(dataset, num_steps):
         """
         Constructs a validation loader and evaluates
         the model.
         """
         loop = tqdm(
-            dataset(), 
+            dataset(),
             total=num_steps,
             disable=not master_process,
             desc='Eval')
@@ -473,14 +474,14 @@ def main():
                 pass
 
     scheduler = LambdaLR(optimizer, compute_lr)
-        
+
     if master_process:
         logger.info(str(vars(args)))
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
         loop = tqdm(
-            train_dataset(), 
+            train_dataset(),
             total=num_train_steps,
             disable=not master_process,
             desc='Train {}'.format(epoch))
@@ -496,7 +497,7 @@ def main():
                 if master_process and loss is not None:
                     train_loss.append(loss)
 
-                    # logging to tensorboard    
+                    # logging to tensorboard
                     writer.add_scalar('train/loss', loss, step)
                     writer.add_scalar('train/acc', acc, step)
 
@@ -505,7 +506,7 @@ def main():
                         val_loss = mean(evaluate(
                             dataset=valid_dataset,
                             num_steps=num_valid_steps))
-                    
+
                     # switching back to training
                     model.train()
 
@@ -513,7 +514,7 @@ def main():
                         logger.info('val loss: {:.4}'.format(
                             val_loss))
 
-                        # logging to tensorboard    
+                        # logging to tensorboard
                         writer.add_scalar(
                             'val/loss', val_loss, step)
 
@@ -527,7 +528,7 @@ def main():
                     else:
                         patience += 1
                         if patience == args.patience:
-                            # terminate when max patience 
+                            # terminate when max patience
                             # level is hit
                             break
 
@@ -535,6 +536,15 @@ def main():
                 if 'out of memory' in str(e):
                     logger.debug('skipping step (oom)')
                     skip += 1
+
+                    # performing dummy forward pass
+                    # to bring the working in sync
+                    dummy_batch = create_dummy_batch(
+                        model_name=args.model, 
+                        ignore_idx=pad_idx)
+
+                    dummy_loss, _ = forward_step(dummy_batch)
+                    backward(dummy_loss)
 
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss, acc=acc, skip=skip))
@@ -566,7 +576,7 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-        
+
     except KeyboardInterrupt:
         # exiting training with Ctrl + C
         pass

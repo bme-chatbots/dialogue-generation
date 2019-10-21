@@ -15,6 +15,7 @@ import shutil
 import os
 import random
 import json
+import tarfile
 
 from tqdm import tqdm
 from itertools import (
@@ -22,6 +23,7 @@ from itertools import (
 
 from math import ceil
 from copy import deepcopy
+from functools import lru_cache
 from collections import namedtuple
 from tempfile import TemporaryFile
 
@@ -97,6 +99,7 @@ def group_elements(iterable, group_size):
 
     return zip_longest(*groups)
 
+
 def generate_num_elements(iterable, num_elements):
     """
     Convenience function for generating `num_elements`
@@ -114,7 +117,7 @@ def save_examples(args, content, name, tokenizer):
     data_dir = join(args.data_dir, args.data,
                     args.model)
 
-    # during data preprocessing the history 
+    # during data preprocessing the history
     # and target utterances are saved only once
     dialogs = generate_dialogs(
         args=args,
@@ -189,7 +192,7 @@ def generate_dialogs(args, content, tokenizer):
                         for i in hist_indices)
 
                 # `len(target_utr) + 1` because
-                # `eos_id` is not added yet and therefore 
+                # `eos_id` is not added yet and therefore
                 # it is not included in target length
                 target_len = len(target_utr) + 1
                 example_len += target_len
@@ -342,7 +345,7 @@ def create_loader(args, filenames, tokenizer,
 
 TOKENIZER = {
     'xlnet-base-cased':     XLNetTokenizer,
-    'xlnet-large-cased':    XLNetTokenizer, 
+    'xlnet-large-cased':    XLNetTokenizer,
     'gpt2':                 GPT2Tokenizer,
     'gpt2-medium':          GPT2Tokenizer,
     'gpt2-large':           GPT2Tokenizer
@@ -403,7 +406,7 @@ def create_dataset(args, master_process):
     metadata_path = join(data_dir, 'metadata.json')
 
     tokenizer = create_tokenizer(args)
-    dataset_cls = create_data_cls(args)        
+    dataset_cls = create_data_cls(args)
 
     # only the master process will create the dataset
     if not exists(metadata_path) and master_process:
@@ -435,7 +438,7 @@ def create_dataset(args, master_process):
         # synchronizing processes before creating
         # data loaders
         barrier()
-    
+
     with open(metadata_path, 'r') as fh:
         filenames = json.load(fh)
 
@@ -444,20 +447,20 @@ def create_dataset(args, master_process):
     test_files, test_size = filenames['test']
 
     train_dataset = create_loader(
-        args=args, 
+        args=args,
         filenames=train_files,
-        tokenizer=tokenizer, 
+        tokenizer=tokenizer,
         dataset_cls=dataset_cls,
         shuffle=True)
 
     valid_dataset = create_loader(
-        args=args, 
+        args=args,
         filenames=valid_files,
         tokenizer=tokenizer,
         dataset_cls=dataset_cls)
 
     test_dataset = create_loader(
-        args=args, 
+        args=args,
         filenames=test_files,
         tokenizer=tokenizer,
         dataset_cls=dataset_cls)
@@ -532,6 +535,18 @@ def create_data_cls(args):
     return data_cls
 
 
+@lru_cache(1)
+def create_dummy_batch(model_name, ignore_idx):
+    """
+    Creates a dummy batch for OOM sync.
+    """
+    collate_fn = COLLATE[model_name]
+    dummy_example = \
+        [[0] * 10, [0] * 10, [ignore_idx] * 2, [10]]
+
+    return collate_fn([dummy_example] * 2)
+
+
 def download(download_path, url):
     """
     Downloads a file.
@@ -601,7 +616,7 @@ class DialogDataset(Dataset):
 
             extracted_files.extend(
                 cls.extract(
-                    download_path=download_path, 
+                    download_path=download_path,
                     extract_dir=extract_dir))
 
         return extracted_files
@@ -628,7 +643,7 @@ class DialogDataset(Dataset):
 
         for content, name in cls.generate_splits(files):
             yield save_examples(
-                args=args, 
+                args=args,
                 content=content,
                 name=name,
                 tokenizer=tokenizer)
@@ -681,7 +696,7 @@ class DialogDataset(Dataset):
         # returning nested lists for convenient
         # parameter passing to collate_fn
         return [
-            input_ids, token_type_ids, 
+            input_ids, token_type_ids,
             target, [seq_len]
         ]
 
@@ -785,14 +800,14 @@ class PersonaChat(DialogDataset):
                 whole_dialog = dialog['utterances'][-1]
                 history = whole_dialog['history']
                 response = whole_dialog['candidates'][-1]
-                
+
                 # appending the response to the whole
                 yield history + [response]
 
         # TODO there is no test data for personachat
         # create separate test data from validation
         return [
-            (generate_uttrs(train), 'train'), 
+            (generate_uttrs(train), 'train'),
             (generate_uttrs(valid), 'valid'),
             (generate_uttrs(test), 'test')
         ]
@@ -819,7 +834,7 @@ class TopicalChat(DialogDataset):
     @classmethod
     def extract(cls, download_path, extract_dir):
         return [join(
-            extract_dir, 
+            extract_dir,
             download_path.split('/')[-1])]
 
     @classmethod
@@ -836,15 +851,15 @@ class TopicalChat(DialogDataset):
         Creates splits from the extracted_files.
         """
         files = [cls.read_file(f) for f in extracted_files]
-        
+
         train, valid_rare, valid_freq, \
             test_rare, test_freq = files
 
         # NOTE currently we are not dealing with
         # frequent or rare elements so merging them
         valid = {**valid_rare, **valid_freq}
-        test =  {**test_rare, **test_freq}
-            
+        test = {**test_rare, **test_freq}
+
         def generate_uttrs(split):
             """
             Generates data from dialog jsons.
@@ -856,7 +871,7 @@ class TopicalChat(DialogDataset):
                 yield [turn['message'] for turn in content]
 
         return [
-            (generate_uttrs(train), 'train'), 
+            (generate_uttrs(train), 'train'),
             (generate_uttrs(valid), 'valid'),
             (generate_uttrs(test), 'test')
         ]
@@ -879,8 +894,10 @@ class OpenSubtitles(DialogDataset):
     """
     """
 
-    name = 'opensubtitles'
+    url = 'http://opus.lingfil.uu.se/download.php?f=OpenSubtitles/'
 
-    @classmethod
-    def transform(cls, args, tokenizer):
-        pass
+    archives = ['en.tar.gz']
+
+    files = ['train.json', 'valid.json', 'test.json']
+
+    name = 'opensubtitles'
