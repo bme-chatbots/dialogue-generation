@@ -12,14 +12,6 @@
 # pylint: disable=not-callable
 # pylint: disable=used-before-assignment
 
-from src.model import (
-    compute_size,
-    create_model,
-    setup_model_args)
-from src.data import (
-    create_dataset,
-    setup_data_args,
-    create_dummy_batch)
 import sys
 import torch
 import argparse
@@ -67,6 +59,16 @@ from os.path import (
 PROJECT_PATH = join(abspath(dirname(__file__)), '..')
 if PROJECT_PATH not in sys.path:
     sys.path.append(PROJECT_PATH)
+
+from src.model import (
+    compute_size,
+    create_model,
+    setup_model_args)
+    
+from src.data import (
+    create_dataset,
+    setup_data_args,
+    create_dummy_batch)
 
 
 def setup_train_args():
