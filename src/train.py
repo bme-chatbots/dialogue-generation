@@ -491,7 +491,7 @@ def main():
         train_step(dummy_batch)
 
     except (RuntimeError, ValueError) as e:
-        if 'out of memory' in e:
+        if 'out of memory' in str(e):
             msg = 'Not enough memory, lower ' + \
                 'the `--batch_size` or `--max_len`'
 
