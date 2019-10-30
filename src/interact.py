@@ -48,11 +48,6 @@ def setup_interact_args():
         default=torch.cuda.is_available(),
         help='Device for training.')
     group.add_argument(
-        '--max_len',
-        type=int,
-        default=100,
-        help='Maximum length of the decoded sequence.')
-    group.add_argument(
         '--top_p',
         type=float,
         default=0.9,
@@ -168,6 +163,7 @@ METHODS = {
 def main():
     args = setup_interact_args()
     args.distributed = False
+    args.cuda = not args.no_cuda
 
     device = torch.device(
         'cuda' if args.cuda else 'cpu')

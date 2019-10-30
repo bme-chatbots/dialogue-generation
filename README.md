@@ -32,7 +32,7 @@ For distributed multi-gpu training the train script should be called like this.
 python -m torch.distributed.launch --nproc_per_node=NUM_GPUS src/train.py --model gpt2
 ```
 
-Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`**. An interactive evaluation mode is available on the trained model by running the `interact` script.
+Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`distilgpt2`** **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`**. An interactive evaluation mode is available on the trained model by running the `interact` script.
 
 ```console
 python -m src.interact --model gpt2-medium --name my_test_run
