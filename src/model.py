@@ -51,7 +51,7 @@ def setup_model_args(parser):
         choices=list(MODEL),
         help='Name of the model.')
     group.add_argument(
-        '--checkpointed',
+        '--grad_ckpt',
         action='store_true',
         help='Use checkpointed models.')
     group.add_argument(
@@ -174,7 +174,7 @@ def create_xlnet_model(args):
         def __init__(self, config):
             super().__init__(config)
 
-            if args.checkpointed:
+            if args.grad_ckpt:
                 self.transformer.layer = ModuleList([
                     CkptXLNetLayer(layer) for
                     layer in self.transformer.layer
@@ -192,7 +192,8 @@ def create_xlnet_model(args):
             new_bias[:old_size] = self.lm_loss.bias
             self.lm_loss.bias = Parameter(new_bias)
 
-        def resize_token_embeddings(self, new_num_tokens=None):
+        def resize_token_embeddings(
+                self, new_num_tokens=None):
             """
             Extends the resize fn by resizing the bias layer.
             """
@@ -246,7 +247,7 @@ def create_gpt2_model(args):
         def __init__(self, config):
             super().__init__(config)
 
-            if args.checkpointed:
+            if args.grad_ckpt:
                 self.transformer.h = ModuleList([
                     CkptGPT2Layer(layer) for
                     layer in self.transformer.h

@@ -491,7 +491,7 @@ def main():
     except (RuntimeError, ValueError) as e:
         if 'out of memory' in str(e):
             msg = 'Not enough memory, there might ' + \
-                'be several out of memory error during' + \
+                'be several out of memory error during ' + \
                 'training. To avoid this lower ' + \
                 'the `--batch_size` or `--max_len`'
 

@@ -37,6 +37,11 @@ def setup_interact_args():
     parser = argparse.ArgumentParser()
     group = parser.add_argument_group('interact')
     group.add_argument(
+        '--model_file',
+        type=str,
+        default=None,
+        help='Path to the file of the model.')
+    group.add_argument(
         '--method',
         type=str,
         default='nucleus',
@@ -163,7 +168,8 @@ METHODS = {
 def main():
     args = setup_interact_args()
     args.distributed = False
-    args.cuda = not args.no_cuda
+    args.cuda = not args.no_cuda and \
+        torch.cuda.is_available()
 
     device = torch.device(
         'cuda' if args.cuda else 'cpu')
@@ -171,11 +177,15 @@ def main():
     assert args.name is not None, \
         '`--name` must be given'
 
-    model_dir = join(args.model_dir, args.model, 
-                     args.name)
+    model_dir = join(
+        args.model_dir, args.model, args.name)
 
+    model_path = args.model_file if \
+        args.model_file else \
+        join(model_dir, 'model.pt')
+    
     state_dict = torch.load(
-        join(model_dir, 'model.pt'),
+        model_path,
         map_location=device)
 
     _, tokenizer, _ = create_dataset(
@@ -207,7 +217,8 @@ def main():
 
         inputs = transform_dialog(
             history[-args.max_hist:],
-            special_ids=special_ids)
+            special_ids=special_ids,
+            max_len=args.max_len)
         
         preds = decode(
             args=args, model=model,
