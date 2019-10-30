@@ -92,7 +92,7 @@ def setup_data_args(parser):
     group.add_argument(
         '--max_len',
         type=int,
-        default=150,
+        default=50,
         help='Maximum length of a sequence.')
 
 

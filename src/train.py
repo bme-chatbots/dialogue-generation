@@ -128,8 +128,8 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def load_state(model_dir, model, optimizer, logger,
-               device):
+def load_state(
+        model_dir, model, optimizer, logger, device):
     """
     Loads the model and optimizer state.
     """
@@ -248,8 +248,8 @@ def main():
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
 
-    model_dir = join(args.model_dir, args.model,
-                     args.name)
+    model_dir = join(
+        args.model_dir, args.model, args.name)
 
     os.makedirs(model_dir, exist_ok=True)
 
@@ -334,7 +334,7 @@ def main():
     valid_dataset, num_valid_steps = valid
     test_dataset, num_test_steps = test
 
-    patience, skip, loss, acc = 0, 1, 0, 0
+    patience, skip, loss, accuracy = 0, 1, 0, 0
 
     def reduce_tensor(tensor):
         """
@@ -447,10 +447,10 @@ def main():
         model.eval()
 
         for batch in loop:
-            loss, acc = forward_step(batch)
+            loss, accuracy = forward_step(batch)
 
             loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss.item(), acc=acc))
+                loss=loss.item(), acc=accuracy))
 
             yield loss.item()
 
@@ -517,50 +517,57 @@ def main():
         model.train()
 
         for batch in loop:
-            loss, accuracy = train_step(batch)
+            try:
+                loss, accuracy = train_step(batch)
 
-            step += 1
+                step += 1
 
-            if master_process and loss is not None:
-                train_loss.append(loss)
-
-                # logging to tensorboard
-                writer.add_scalar('train/loss', loss, step)
-                writer.add_scalar('train/acc', acc, step)
-
-            if not step % args.eval_every_step:
-                with torch.no_grad():
-                    val_loss = mean(evaluate(
-                        dataset=valid_dataset,
-                        num_steps=num_valid_steps))
-
-                # switching back to training
-                model.train()
-
-                if master_process:
-                    logger.info('val loss: {:.4}'.format(
-                        val_loss))
+                if master_process and loss is not None:
+                    train_loss.append(loss)
 
                     # logging to tensorboard
-                    writer.add_scalar(
-                        'val/loss', val_loss, step)
+                    writer.add_scalar('train/loss', loss, step)
+                    writer.add_scalar('train/acc', accuracy, step)
 
-                if val_loss < best_val_loss:
-                    patience = 0
-                    best_val_loss = val_loss
+                if not step % args.eval_every_step:
+                    with torch.no_grad():
+                        val_loss = mean(evaluate(
+                            dataset=valid_dataset,
+                            num_steps=num_valid_steps))
+
+                    # switching back to training
+                    model.train()
 
                     if master_process:
-                        save_state()
+                        logger.info('val loss: {:.4}'.format(
+                            val_loss))
 
-                else:
-                    patience += 1
-                    if patience == args.patience:
-                        # terminate when max patience
-                        # level is hit
-                        break
+                        # logging to tensorboard
+                        writer.add_scalar(
+                            'val/loss', val_loss, step)
+
+                    if val_loss < best_val_loss:
+                        patience = 0
+                        best_val_loss = val_loss
+
+                        if master_process:
+                            save_state()
+
+                    else:
+                        patience += 1
+                        if patience == args.patience:
+                            # terminate when max patience
+                            # level is hit
+                            break
+
+            except RuntimeError as e:
+                if 'out of memory' in str(e):
+                    if args.distributed:
+                        raise e
+                    skip += 1
 
             loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss, acc=acc, skip=skip))
+                loss=loss, acc=accuracy, skip=skip))
 
         if len(train_loss) > 0:
             train_loss = mean(train_loss)
