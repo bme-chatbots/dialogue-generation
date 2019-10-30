@@ -89,6 +89,11 @@ def setup_data_args(parser):
         type=int,
         default=4,
         help='Maximum number of turns in history.')
+    group.add_argument(
+        '--max_len',
+        type=int,
+        default=150,
+        help='Maximum length of a sequence.')
 
 
 def group_elements(iterable, group_size):
@@ -114,9 +119,9 @@ def save_examples(args, content, name, tokenizer):
     Creates numericalizes examples from a raw data
     file and serializes them.
     """
-    data_dir = join(args.data_dir, args.data,
-                    args.model)
-
+    data_dir = join(
+        args.data_dir, args.data, args.model)
+ 
     # during data preprocessing the history
     # and target utterances are saved only once
     dialogs = generate_dialogs(
@@ -212,7 +217,7 @@ def generate_dialogs(args, content, tokenizer):
         yield dialog, indices
 
 
-def transform_dialog(history, special_ids):
+def transform_dialog(history, special_ids, max_len):
     """
     Transforms a dialog and creates `input_ids`
     and `token_type_ids` lists.
@@ -228,6 +233,8 @@ def transform_dialog(history, special_ids):
         role_id = sp2_id if idx % 2 == 0 else sp1_id
 
         ids = [role_id] + utr
+        # truncating each sequence to max len
+        ids = ids[:max_len]
         input_ids.append(ids)
 
         type_id = hst_id
@@ -290,8 +297,21 @@ class IndexSampler(Sampler):
         return len(self.data_source)
 
 
-def create_loader(args, filenames, tokenizer,
-                  dataset_cls, shuffle=False):
+def generate_files(filenames):
+    """
+    Geberates files from the filenames.
+    """
+    file_dataset = FileDataset(filenames)
+    file_loader = DataLoader(
+        file_dataset,
+        collate_fn=lambda x: x[0])
+
+    yield from file_loader
+
+        
+def create_loader(
+        args, filenames, tokenizer, dataset_cls, 
+        shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
@@ -316,18 +336,16 @@ def create_loader(args, filenames, tokenizer,
         Generator that loads examples from files
         lazily.
         """
-        file_dataset = FileDataset(filenames)
-        file_loader = DataLoader(
-            file_dataset,
-            collate_fn=lambda x: x[0])
+        files = generate_files(filenames)
 
-        for dialogs, indices in file_loader:
+        for dialogs, indices in files:
             sampler = bucket_sampler_cls(
                 indices, shuffle=shuffle)
 
             dialog_dataset = dataset_cls(
                 dialogs=dialogs,
                 indices=indices,
+                max_len=args.max_len,
                 special_ids=special_ids)
 
             example_loader = DataLoader(
@@ -453,6 +471,8 @@ def create_dataset(args, master_process):
         dataset_cls=dataset_cls,
         shuffle=True)
 
+    max_len = args.max_len
+
     valid_dataset = create_loader(
         args=args,
         filenames=valid_files,
@@ -469,7 +489,7 @@ def create_dataset(args, master_process):
     valid = valid_dataset, valid_size
     test = test_dataset, test_size
 
-    return (train, valid, test), tokenizer
+    return (train, valid, test), tokenizer, max_len
 
 
 def create_sampler_cls(sampler_cls):
@@ -535,16 +555,32 @@ def create_data_cls(args):
     return data_cls
 
 
-@lru_cache(1)
-def create_dummy_batch(model_name, ignore_idx):
+def create_dummy_batch(
+        args, ignore_idx):
     """
     Creates a dummy batch for OOM sync.
     """
-    collate_fn = COLLATE[model_name]
-    dummy_example = \
-        [[0] * 10, [0] * 10, [ignore_idx] * 2, [10]]
+    collate_fn = COLLATE[args.model]
 
-    return collate_fn([dummy_example] * 2)
+    # each input starts with a role id
+    # and the whole sequence starts with
+    # a special sos token
+    input_len = (args.max_len + 1) * \
+        args.max_hist + 1
+
+    # adding 1 for the final eos_token
+    target_len = args.max_len + 1
+
+    targets = [ignore_idx] * target_len
+    input_ids = [0] * input_len + targets
+    token_type_ids = [0] * len(input_ids)
+
+    dummy_example = [
+        input_ids, token_type_ids, 
+        targets, [input_len]]
+
+    return collate_fn(
+        [dummy_example] * args.batch_size)
 
 
 def download(download_path, url):
@@ -665,13 +701,16 @@ class DialogDataset(Dataset):
 
         return {s.name: s for s in subclasses}
 
-    def __init__(self, dialogs, indices, special_ids):
+    def __init__(
+            self, dialogs, indices, 
+            special_ids, max_len):
         self.dialogs = dialogs
         self.indices = indices
+        self.max_len = max_len
         self.special_ids = special_ids
 
     def __getitem__(self, idx):
-        dialog_idx, begin_idx, end_idx, seq_len = \
+        dialog_idx, begin_idx, end_idx, input_len = \
             self.indices[idx]
         dialog = self.dialogs[dialog_idx]
 
@@ -682,11 +721,17 @@ class DialogDataset(Dataset):
         rsp_id = self.special_ids[5]
 
         history = dialog[begin_idx:end_idx]
-        target = dialog[end_idx] + [eos_id]
+        
+        # truncating the target to max_len
+        # each input sequence will be tuncated
+        # in `transform_dialog` function
+        target = dialog[end_idx][:self.max_len]
+        target += [eos_id]
 
         inputs = transform_dialog(
             history=history,
-            special_ids=self.special_ids)
+            special_ids=self.special_ids,
+            max_len=self.max_len)
 
         input_ids, token_type_ids = inputs
 
@@ -696,8 +741,8 @@ class DialogDataset(Dataset):
         # returning nested lists for convenient
         # parameter passing to collate_fn
         return [
-            input_ids, token_type_ids,
-            target, [seq_len]
+            input_ids, token_type_ids, 
+            target, [input_len]
         ]
 
     def __len__(self):

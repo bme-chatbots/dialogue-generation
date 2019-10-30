@@ -12,6 +12,14 @@
 # pylint: disable=not-callable
 # pylint: disable=used-before-assignment
 
+from src.model import (
+    compute_size,
+    create_model,
+    setup_model_args)
+from src.data import (
+    create_dataset,
+    setup_data_args,
+    create_dummy_batch)
 import sys
 import torch
 import argparse
@@ -59,16 +67,6 @@ from os.path import (
 PROJECT_PATH = join(abspath(dirname(__file__)), '..')
 if PROJECT_PATH not in sys.path:
     sys.path.append(PROJECT_PATH)
-
-from src.data import (
-    create_dataset,
-    setup_data_args,
-    create_dummy_batch)
-
-from src.model import (
-    compute_size,
-    create_model,
-    setup_model_args)
 
 
 def setup_train_args():
@@ -282,7 +280,7 @@ def main():
 
     # creating dataset and storing dataset splits
     # as individual variables for convenience
-    datasets, tokenizer = create_dataset(
+    datasets, tokenizer, max_len = create_dataset(
         args=args, master_process=master_process)
 
     pad_idx = tokenizer.convert_tokens_to_ids(
@@ -334,7 +332,7 @@ def main():
     valid_dataset, num_valid_steps = valid
     test_dataset, num_test_steps = test
 
-    patience, skip, loss, acc = 0, 0, 0, 0
+    patience, skip, loss, acc = 0, 1, 0, 0
 
     def reduce_tensor(tensor):
         """
@@ -381,10 +379,17 @@ def main():
         loss, accuracy = forward_step(batch)
 
         if torch.isnan(loss).item():
+            # during distributed training NaN
+            # values are not handled
+            if args.distributed:
+                raise ValueError(
+                    'NaN values encountered.')
+
             logger.debug('skipping step (nan)')
             # returning None values when a NaN loss
             # is encountered and skipping backprop
             # so model grads will not be corrupted
+
             skip += 1
             return None, None
 
@@ -392,8 +397,6 @@ def main():
 
         backward(loss)
         clip_grad_norm(1.0)
-
-        step += 1
 
         if step % args.grad_accum_steps == 0:
             optimizer.step()
@@ -478,6 +481,28 @@ def main():
     if master_process:
         logger.info(str(vars(args)))
 
+    try:
+        # initializing cuda buffer to avoid OOM errors
+        dummy_batch = create_dummy_batch(
+            args, ignore_idx=pad_idx)
+
+        train_step(dummy_batch)
+
+    except RuntimeError as e:
+        if 'out of memory' in e:
+            msg = 'Not enough memory, lower ' + \
+                'the `--batch_size` or `--max_len`'
+
+            if not args.checkpointed:
+                msg += ', use the `--checkpointed` flag'
+            
+            if not APEX_INSTALLED:
+                msg += ' or install apex for mixed precision'
+
+            logger.info(msg + '.')
+            return
+        raise e
+
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
         loop = tqdm(
@@ -491,60 +516,47 @@ def main():
         model.train()
 
         for batch in loop:
-            try:
-                loss, acc = train_step(batch)
+            loss, accuracy = train_step(batch)
 
-                if master_process and loss is not None:
-                    train_loss.append(loss)
+            step += 1
+
+            if master_process and loss is not None:
+                train_loss.append(loss)
+
+                # logging to tensorboard
+                writer.add_scalar('train/loss', loss, step)
+                writer.add_scalar('train/acc', acc, step)
+
+            if not step % args.eval_every_step:
+                with torch.no_grad():
+                    val_loss = mean(evaluate(
+                        dataset=valid_dataset,
+                        num_steps=num_valid_steps))
+
+                # switching back to training
+                model.train()
+
+                if master_process:
+                    logger.info('val loss: {:.4}'.format(
+                        val_loss))
 
                     # logging to tensorboard
-                    writer.add_scalar('train/loss', loss, step)
-                    writer.add_scalar('train/acc', acc, step)
+                    writer.add_scalar(
+                        'val/loss', val_loss, step)
 
-                if not step % args.eval_every_step:
-                    with torch.no_grad():
-                        val_loss = mean(evaluate(
-                            dataset=valid_dataset,
-                            num_steps=num_valid_steps))
-
-                    # switching back to training
-                    model.train()
+                if val_loss < best_val_loss:
+                    patience = 0
+                    best_val_loss = val_loss
 
                     if master_process:
-                        logger.info('val loss: {:.4}'.format(
-                            val_loss))
+                        save_state()
 
-                        # logging to tensorboard
-                        writer.add_scalar(
-                            'val/loss', val_loss, step)
-
-                    if val_loss < best_val_loss:
-                        patience = 0
-                        best_val_loss = val_loss
-
-                        if master_process:
-                            save_state()
-
-                    else:
-                        patience += 1
-                        if patience == args.patience:
-                            # terminate when max patience
-                            # level is hit
-                            break
-
-            except RuntimeError as e:
-                if 'out of memory' in str(e):
-                    logger.debug('skipping step (oom)')
-                    skip += 1
-
-                    # performing dummy forward pass
-                    # to bring the working in sync
-                    dummy_batch = create_dummy_batch(
-                        model_name=args.model, 
-                        ignore_idx=pad_idx)
-
-                    dummy_loss, _ = forward_step(dummy_batch)
-                    backward(dummy_loss)
+                else:
+                    patience += 1
+                    if patience == args.patience:
+                        # terminate when max patience
+                        # level is hit
+                        break
 
             loop.set_postfix(ordered_dict=OrderedDict(
                 loss=loss, acc=acc, skip=skip))
