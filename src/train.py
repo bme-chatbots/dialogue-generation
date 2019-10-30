@@ -26,7 +26,6 @@ from tqdm import tqdm
 from math import ceil
 from datetime import datetime
 from statistics import mean
-from functools import wraps
 
 try:
     from apex import amp
@@ -35,8 +34,7 @@ except ImportError:
     APEX_INSTALLED = False
 
 from torch.nn.functional import (
-    cross_entropy, softmax,
-    kl_div, log_softmax,
+    softmax, log_softmax,
     nll_loss)
 
 from torch.distributed import (
@@ -492,7 +490,9 @@ def main():
 
     except (RuntimeError, ValueError) as e:
         if 'out of memory' in str(e):
-            msg = 'Not enough memory, lower ' + \
+            msg = 'Not enough memory, there might ' + \
+                'be several out of memory error during' + \
+                'training. To avoid this lower ' + \
                 'the `--batch_size` or `--max_len`'
 
             if not args.checkpointed:
@@ -502,7 +502,9 @@ def main():
                 msg += ' or install apex for mixed precision'
 
             logger.info(msg + '.')
-            return
+
+            if args.distributed:
+                return
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
