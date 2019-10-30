@@ -490,7 +490,7 @@ def main():
 
         train_step(dummy_batch)
 
-    except RuntimeError as e:
+    except (RuntimeError, ValueError) as e:
         if 'out of memory' in e:
             msg = 'Not enough memory, lower ' + \
                 'the `--batch_size` or `--max_len`'
@@ -503,7 +503,6 @@ def main():
 
             logger.info(msg + '.')
             return
-        raise e
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
