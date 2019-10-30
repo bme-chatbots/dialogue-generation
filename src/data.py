@@ -36,7 +36,7 @@ from torch.distributed import barrier
 from torch.utils.data.distributed import (
     DistributedSampler)
 
-from pytorch_transformers import (
+from transformers import (
     XLNetTokenizer,
     GPT2Tokenizer)
 
@@ -364,6 +364,7 @@ def create_loader(
 TOKENIZER = {
     'xlnet-base-cased':     XLNetTokenizer,
     'xlnet-large-cased':    XLNetTokenizer,
+    'distilgpt2':           GPT2Tokenizer,
     'gpt2':                 GPT2Tokenizer,
     'gpt2-medium':          GPT2Tokenizer,
     'gpt2-large':           GPT2Tokenizer
@@ -375,8 +376,9 @@ def create_tokenizer(args):
     Creates the tokenizer for the model and saves
     it in the model data directory if it does not exist.
     """
-    data_dir = join(args.data_dir, args.data,
-                    args.model)
+    data_dir = join(
+        args.data_dir, args.data, args.model)
+
     tokenizer_path = join(
         data_dir, 'special_tokens_map.json')
 

@@ -20,7 +20,7 @@ from torch.nn.modules import (
 from torch.nn import (
     Linear, Parameter)
 
-from pytorch_transformers import (
+from transformers import (
     XLNetLMHeadModel, XLNetConfig,
     XLNetModel, GPT2Config,
     GPT2LMHeadModel)
@@ -184,6 +184,7 @@ class GPT2Generator(GPT2LMHeadModel):
 MODEL = {
     'xlnet-base-cased':     XLNetGenerator, 
     'xlnet-large-cased':    XLNetGenerator, 
+    'distilgpt2':           GPT2Generator,
     'gpt2':                 GPT2Generator,
     'gpt2-medium':          GPT2Generator,
     'gpt2-large':           GPT2Generator

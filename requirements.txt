@@ -1,6 +1,6 @@
 pylint
 torch
-pytorch-transformers
+transformers
 tqdm
 tensorboardX
 Cython

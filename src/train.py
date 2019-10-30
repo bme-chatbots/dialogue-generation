@@ -47,7 +47,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.nn.parallel import (
     DistributedDataParallel)
 
-from pytorch_transformers import (
+from transformers import (
     WarmupLinearSchedule, AdamW)
 
 from os.path import (

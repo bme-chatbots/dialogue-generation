@@ -99,6 +99,7 @@ def gpt2_padded_collate(vector[vector[vector[int]]] examples):
 COLLATE = {
     'xlnet-base-cased':     xlnet_padded_collate,
     'xlnet-large-cased':    xlnet_padded_collate,
+    'distilgpt2':           gpt2_padded_collate,
     'gpt2':                 gpt2_padded_collate,
     'gpt2-medium':          gpt2_padded_collate,
     'gpt2-large':           gpt2_padded_collate
@@ -124,6 +125,7 @@ def prepare_gpt2_inputs(input_ids, token_type_ids):
 PREPARE = {
     'xlnet-base-cased':     prepare_xlnet_inputs,
     'xlnet-large-cased':    prepare_xlnet_inputs,
+    'distilgpt2':           prepare_gpt2_inputs,
     'gpt2':                 prepare_gpt2_inputs,
     'gpt2-medium':          prepare_gpt2_inputs,
     'gpt2-large':           prepare_gpt2_inputs
