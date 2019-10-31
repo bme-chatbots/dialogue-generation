@@ -21,11 +21,7 @@ from tqdm import tqdm
 from itertools import (
     zip_longest, chain)
 
-from math import ceil
 from copy import deepcopy
-from functools import lru_cache
-from collections import namedtuple
-from tempfile import TemporaryFile
 
 from torch.utils.data import (
     Dataset, DataLoader,
@@ -90,6 +86,10 @@ def setup_data_args(parser):
         default=4,
         help='Maximum number of turns in history.')
     group.add_argument(
+        '--force_rebuild',
+        action='store_true',
+        help='Creates the dataset even if it exists.')
+    group.add_argument(
         '--max_len',
         type=int,
         default=50,
@@ -142,8 +142,7 @@ def save_examples(args, content, name, tokenizer):
         filenames.append(filename)
 
         examples, indices = zip(
-            *list(generate_examples(
-                dialogs=group)))
+            *list(generate_examples(dialogs=group)))
 
         indices = list(chain(*indices))
 
@@ -419,8 +418,9 @@ def create_dataset(args, master_process):
     Downloads the dataset, converts it to tokens and 
     returns iterators over the train and test splits.
     """
-    data_dir = join(args.data_dir, args.data,
-                    args.model)
+    data_dir = join(
+        args.data_dir, args.data, args.model)
+
     os.makedirs(data_dir, exist_ok=True)
 
     metadata_path = join(data_dir, 'metadata.json')
@@ -429,7 +429,8 @@ def create_dataset(args, master_process):
     dataset_cls = create_data_cls(args)
 
     # only the master process will create the dataset
-    if not exists(metadata_path) and master_process:
+    if (not exists(metadata_path) \
+            or args.force_rebuild) and master_process:
         # if dataset does not exist then create it
         # downloading and tokenizing the raw files
         files = dataset_cls.download(args=args)
@@ -948,3 +949,4 @@ class OpenSubtitles(DialogDataset):
     files = ['train.json', 'valid.json', 'test.json']
 
     name = 'opensubtitles'
+

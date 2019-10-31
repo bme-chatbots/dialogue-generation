@@ -196,8 +196,20 @@ def main():
     model = create_model(args, model_dir, vocab_size)
     model = model.to(device)
     
-    model.load_state_dict(state_dict['model'])
-    model.eval()
+    try:
+        model.load_state_dict(state_dict['model'])
+        model.eval()
+    except KeyError as e:
+        print(
+            'The provided checkpoint has mismatching '
+            'weights in the parameter dict.'
+        )
+
+        print(
+            'WARNING: If the model was trained with '
+            '`--grad_ckpt` you also have to provide '
+            'this argument for this script.'
+        )
 
     history = []
 

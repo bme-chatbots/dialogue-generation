@@ -1,0 +1,10 @@
+{
+    "name": "xlnet-dailydialog",
+    "model": "xlnet-base-cased",
+    "data": "dailydialog",
+    "max_hist": 2,
+    "max_len": 80,
+    "force_rebuild": true,
+    "batch_size": 64,
+    "grad_ckpt": true
+}

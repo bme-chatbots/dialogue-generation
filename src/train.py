@@ -13,6 +13,7 @@
 # pylint: disable=used-before-assignment
 
 import sys
+import json
 import torch
 import argparse
 import logging
@@ -76,6 +77,11 @@ def setup_train_args():
     parser = argparse.ArgumentParser()
     group = parser.add_argument_group('train')
     group.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help='Path of the config file.')
+    group.add_argument(
         '--max_epochs',
         type=int,
         default=25,
@@ -107,12 +113,12 @@ def setup_train_args():
     group.add_argument(
         '--grad_accum_steps',
         type=int,
-        default=8,
+        default=4,
         help='Number of steps for grad accum.')
     group.add_argument(
         '--eval_every_step',
         type=int,
-        default=3000,
+        default=1500,
         help='Evaluation frequency in steps.')
     group.add_argument(
         '--local_rank',
@@ -242,6 +248,14 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
+
+    # if config is provided, then load it
+    if args.config is not None:
+        with open(args.config, 'r') as fh:
+            config = json.load(fh)
+
+        for arg in config:
+            setattr(args, arg, config[arg])
 
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
@@ -440,7 +454,8 @@ def main():
             dataset(),
             total=num_steps,
             disable=not master_process,
-            desc='Eval')
+            desc='Eval',
+            leave=False)
 
         model.eval()
 
@@ -503,8 +518,8 @@ def main():
 
             logger.info(msg + '.')
 
-            if args.distributed:
-                return
+        if args.distributed:
+            return
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
@@ -512,7 +527,8 @@ def main():
             train_dataset(),
             total=num_train_steps,
             disable=not master_process,
-            desc='Train {}'.format(epoch))
+            desc='Train {}'.format(epoch),
+            leave=False)
 
         train_loss = []
 
