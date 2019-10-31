@@ -2,9 +2,7 @@
 
 Implementation of a neural dialogue generator model with pretrained **XLNet**  *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* and **GPT2** architecture *[Radford et al. (2019)](https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf)* on currently three datasets: **DailyDialog** *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)* , **PersonaChat** *[Zhang et al. (2018)](https://arxiv.org/pdf/1801.07243.pdf)* and the new **TopicalChat** *[Gopalakrishnan et al. (2019)](https://m.media-amazon.com/images/G/01/amazon.jobs/3079_Paper._CB1565131710_.pdf)* from [Alexa Prize Socialbot Grand Challenge 3](https://developer.amazon.com/blogs/alexa/post/30dc5515-3b9f-4ec2-8f2a-ac98254625c6/topical-chat-dataset-helps-researchers-address-hard-challenges-in-natural-conversation). Top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)* are available as decoding techniques.
 
-## Usage
-
-### Installation
+## Installation
 
 The model uses mixed precision training from nvidia/apex. Note that apex is not required and is only used if it is available. For installation guide of this module see the official [instructions](https://github.com/NVIDIA/apex).
 
@@ -20,7 +18,7 @@ pip install -r requirements.txt
 python setup.py build_ext --inplace
 ```
 
-### Training
+## Training
 
 The model can be trained with the following commands. Note that `--data_dir` and `--model_dir` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. The exact path of the model is `<model_dir>/<model>/<name>` where the name subdirectory is given by the `--name` argument ( `DD:MM:YY-hh-mm-ss` by default ) contains the logs and training checkpoints for a particular run, while `<model>` contains the pretrained initial checkpoint of the model. This is useful if one would like to train a model on several datasets in a consecutive manner, which can be done by mainting the same `--name` argument and changing the `--data` parameter.
 
@@ -77,7 +75,7 @@ The model can be trained then by simply running the `run.sh` script with the def
 !cd dialogue-generation; python -m src.train
 ```
 
-### Interaction
+## Interaction
 
 An interactive evaluation mode is available on the trained model by running the `interact` script and providing the path of the trained model with `--model_file`. You can also provide the `--config` file or just simply give the same `--model` and `--name` argument, which was used during training.
 
