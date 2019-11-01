@@ -10,6 +10,7 @@
 # pylint: disable=no-member
 # pylint: disable=no-name-in-module
 
+import sys
 import argparse
 import torch
 
@@ -199,7 +200,7 @@ def main():
     try:
         model.load_state_dict(state_dict['model'])
         model.eval()
-    except KeyError as e:
+    except RuntimeError as e:
         print(
             'The provided checkpoint has mismatching '
             'weights in the parameter dict.'
@@ -210,6 +211,8 @@ def main():
             '`--grad_ckpt` you also have to provide '
             'this argument for this script.'
         )
+
+        sys.exit()
 
     history = []
 

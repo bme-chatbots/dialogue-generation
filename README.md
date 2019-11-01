@@ -1,10 +1,10 @@
 # Dialogue generation
 
-Implementation of a neural dialogue generator model with pretrained **XLNet**  *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* and **GPT2** architecture *[Radford et al. (2019)](https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf)* on currently three datasets: **DailyDialog** *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)* , **PersonaChat** *[Zhang et al. (2018)](https://arxiv.org/pdf/1801.07243.pdf)* and the new **TopicalChat** *[Gopalakrishnan et al. (2019)](https://m.media-amazon.com/images/G/01/amazon.jobs/3079_Paper._CB1565131710_.pdf)* from [Alexa Prize Socialbot Grand Challenge 3](https://developer.amazon.com/blogs/alexa/post/30dc5515-3b9f-4ec2-8f2a-ac98254625c6/topical-chat-dataset-helps-researchers-address-hard-challenges-in-natural-conversation). Top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)* are available as decoding techniques.
+Implementation of a neural dialogue generator model with pretrained **XLNet**  *[Yang et al. (2019)](https://arxiv.org/pdf/1906.08237.pdf)* and **GPT2** architecture *[Radford et al. (2019)](https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf)* on currently three datasets: **DailyDialog** *[Li et al. (2017)](https://arxiv.org/pdf/1710.03957.pdf)* , **PersonaChat** *[Zhang et al. (2018)](https://arxiv.org/pdf/1801.07243.pdf)* and the new **TopicalChat** *[Gopalakrishnan et al. (2019)](https://m.media-amazon.com/images/G/01/amazon.jobs/3079_Paper._CB1565131710_.pdf)* from [Alexa Prize Socialbot Grand Challenge 3](https://developer.amazon.com/blogs/alexa/post/30dc5515-3b9f-4ec2-8f2a-ac98254625c6/topical-chat-dataset-helps-researchers-address-hard-challenges-in-natural-conversation). Top-k sampling *[Fan et al. (2018)](https://arxiv.org/pdf/1904.09751.pdf)* and nucleus decoding *[Holtzman et al. (2019)](https://arxiv.org/pdf/1904.09751.pdf)* are available as decoding techniques. The training objective is autoregressive language modeling on the utterances and dialogue histories.
 
 ## Installation
 
-The model uses mixed precision training from nvidia/apex. Note that apex is not required and is only used if it is available. For installation guide of this module see the official [instructions](https://github.com/NVIDIA/apex).
+The model can leverage mixed precision training from nvidia/apex. Note that apex is not required and is only used if it is available. For installation guide see the official [instructions](https://github.com/NVIDIA/apex). Using this module is not useful for all GPUs ( only Volta and Turing ) and you should check in prior if your instance supports mixed precision training.
 
 To train the model clone this repository and install dependecies. The project uses cython to assemble batches for faster input pipeline. It also preferred to use a python virtualenv.
 
@@ -48,9 +48,9 @@ Copy and run the following code in a cell of your colab *( or Kaggle kernel )* f
 !git clone https://github.com/bme-chatbots/dialogue-generation.git
 !python -m pip install --upgrade pip
 
-# installing apex
-!git clone https://github.com/NVIDIA/apex
-!cd apex; pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" .
+# installing apex is optional and is only useful if Colab's Tesla T4 is used
+# !git clone https://github.com/NVIDIA/apex
+# !cd apex; pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" .
 
 # building the cython code
 !cd dialogue-generation; python setup.py build_ext --inplace

@@ -306,7 +306,8 @@ def main():
         args.mixed = False
 
     model = create_model(
-        args=args, model_dir=model_dir,
+        args=args, 
+        model_dir=model_dir,
         vocab_size=vocab_size)
 
     model = model.to(device)
@@ -364,9 +365,7 @@ def main():
         """
         inputs, targets = batch
 
-        outputs = model(
-            inputs=inputs,
-            half=args.mixed)
+        outputs = model(inputs, half=args.mixed)
 
         # converting targets from ndarray
         targets = torch.as_tensor(targets)
