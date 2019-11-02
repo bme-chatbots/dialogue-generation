@@ -509,7 +509,7 @@ def main():
                 'training. To avoid this lower ' + \
                 'the `--batch_size` or `--max_len`'
 
-            if not args.checkpointed:
+            if not args.grad_ckpt:
                 msg += ', use the `--checkpointed` flag'
             
             if not APEX_INSTALLED:
