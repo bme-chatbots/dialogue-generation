@@ -107,7 +107,7 @@ Hi my name Peter.
 Nice to meet you I am Eric.
 ```
 
-An example custom dataset class named `CustromDataset` is implemented in `data.py` that reads a dataset with these properties.
+An example custom dataset class named `CustromDataset` is implemented in [`data.py`](https://github.com/bme-chatbots/dialogue-generation/blob/05a140b39bf8fb5b12ebb5f7f9f77e56f38ce752/src/data.py#L954) that reads a dataset with these properties.
 
 ## Results
 
