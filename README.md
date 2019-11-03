@@ -52,11 +52,8 @@ Copy and run the following code in a cell of your colab *( or Kaggle kernel )* f
 # !git clone https://github.com/NVIDIA/apex
 # !cd apex; pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" .
 
-# building the cython code
-!cd dialogue-generation; python setup.py build_ext --inplace
-
-# installing the required packages
-!cd dialogue-generation; pip install -r requirements.txt
+# building the cython code and installing the required packages
+!cd dialogue-generation; pip install -r requirements.txt; python setup.py build_ext --inplace
 ```
 
 The training loss and accuracy is logged with TensorboardX, which can also be tracked in the colab file if the below code is run before the training cell.
@@ -69,10 +66,20 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 %tensorboard --logdir "dialogue-generation/model"
 ```
 
-The model can be trained then by simply running the `run.sh` script with the default parameters.
+The model can be trained then by simply running the `train` script with the default parameters.
 
 ```bash
 !cd dialogue-generation; python -m src.train
+```
+
+After training the model can be downloaded by setting the download link in the following snippet to the one logged by the script after evaluation. ( `Saving model to dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt` )
+
+```python
+from IPython.display import FileLink
+
+# note that in case of kaggle kernel you have to give path
+# relative to your working directory
+FileLink(r'dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt')
 ```
 
 ## Interaction
@@ -86,6 +93,21 @@ python -m src.interact --model gpt2-medium --name my_test_run
 ```console
 python -m src.interact --config src/configs/xlnet-dailydialog.json
 ```
+
+## Customization
+
+To train any model on your own dataset you simply have to subclass from `DialogDataset` and implement data generation from the raw files. Given a `train.txt`, `valid.txt` and `test.txt` placed in `data\<name of your data>`, where each turn in a dialog is in a new line and separate dialogs are divided by an extra empty line.
+
+```text
+Hello how are you?
+Hi I'm fine thanks. And you?
+Me too thanks for asking.
+
+Hi my name Peter.
+Nice to meet you I am Eric.
+```
+
+An example custom dataset class named `CustromDataset` is implemented in `data.py` that reads a dataset with these properties.
 
 ## Results
 

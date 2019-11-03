@@ -23,7 +23,6 @@ import numpy as np
 
 from tensorboardX import SummaryWriter
 from collections import OrderedDict
-from tqdm import tqdm
 from math import ceil
 from datetime import datetime
 from statistics import mean
@@ -125,6 +124,10 @@ def setup_train_args():
         type=int,
         default=-1,
         help='Local rank for the script.')
+    group.add_argument(
+        '--notebook',
+        action='store_true',
+        help='Set true if you are using IPython notebook.')
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -248,6 +251,11 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
+
+    if args.notebook:
+        from tqdm import tqdm_notebook as tqdm
+    else:
+        from tqdm import tqdm
 
     # if config is provided, then load it
     if args.config is not None:

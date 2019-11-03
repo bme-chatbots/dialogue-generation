@@ -950,3 +950,51 @@ class OpenSubtitles(DialogDataset):
 
     name = 'opensubtitles'
 
+
+class CustomDataset(DialogDataset):
+    """
+    Example for defining a custom dataset.
+    """
+
+    name = 'custom_dataset'
+
+    @classmethod
+    def download(cls, args):
+        # this method would normally download the
+        # dataset but it is assumed that custom data
+        # is already present
+        return [
+            (join(args.data_dir, split) + '.txt', split)
+            for split in ['train', 'valid', 'test']
+        ]
+
+    @classmethod
+    def read_file(cls, data_path):
+        """
+        Reads the contents of a raw file.
+        """
+        with open(data_path, 'r') as fh:
+            for line in fh:
+                yield fh.strip()
+
+    @classmethod
+    def generate_splits(cls, extracted_files):
+        """
+        Creates splits from the extracted_files.
+        """
+        def generate_uttrs(split):
+            """
+            Generates data from text data.
+            """
+            dialog = []
+            for utterance in split:
+                if utterance == '':
+                    yield dialog
+                    dialog = []
+                else:
+                    dialog.append(utterance)
+
+        return [
+            (generate_uttrs(file_path), name)
+            for file_path, name in extracted_files
+        ]
