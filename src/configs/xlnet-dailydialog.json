@@ -4,6 +4,5 @@
     "data": "dailydialog",
     "max_hist": 2,
     "max_len": 50,
-    "force_rebuild": true,
     "batch_size": 64
 }

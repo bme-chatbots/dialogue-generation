@@ -26,6 +26,8 @@ from src.model import (
     create_model,
     setup_model_args)
 
+from src.train import set_seed
+
 from src.collate import PREPARE
 
 from torch.nn.functional import softmax
@@ -63,6 +65,11 @@ def setup_interact_args():
         type=int,
         default=100,
         help='Top-k parameter for topk sampling.')
+    group.add_argument(
+        '--seed',
+        type=int,
+        default=1111,
+        help='Random seed for interactive mode.')
 
     setup_data_args(parser)
     setup_model_args(parser)
@@ -171,6 +178,8 @@ def main():
     args.distributed = False
     args.cuda = not args.no_cuda and \
         torch.cuda.is_available()
+
+    set_seed(args)
 
     device = torch.device(
         'cuda' if args.cuda else 'cpu')

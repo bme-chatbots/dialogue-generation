@@ -40,7 +40,7 @@ python -m src.train --config src/configs/xlnet-dailydialog.json
 
 Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`distilgpt2`** **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`** but you can easily extend them by adding your own. Example to create your own dataset can be seen below.
 
-Training the model is fast and easy on *[Google Colaboratory](https://colab.research.google.com/notebooks/welcome.ipynb)* or *[Kaggle kernel](https://www.kaggle.com/kernels)*, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running `!nvidia-smi` in a cell of your colab. Note that Kaggle kernel's GPUs are faster than K80 and also don't go idle.
+Training the model is fast and easy on *[Google Colaboratory](https://colab.research.google.com/notebooks/welcome.ipynb)* or *[Kaggle kernel](https://www.kaggle.com/kernels)*, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with a Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older K80 version. You can check the current type by running `!nvidia-smi` in a cell of your colab. Note that Kaggle kernel's GPUs are faster than K80 and doesn't go idle after inactivity.
 
 Copy and run the following code in a cell of your colab *( or Kaggle kernel )* file to install the model. If you use Kaggle kernel you also have to enable internet access.
 
@@ -107,7 +107,7 @@ Hi my name Peter.
 Nice to meet you I am Eric.
 ```
 
-An example custom dataset class named `CustromDataset` is implemented in `data.py` that reads a dataset with these properties.
+An example custom dataset class named `CustomDataset` is implemented in `data.py` that reads a dataset with these properties.
 
 ## Results
 

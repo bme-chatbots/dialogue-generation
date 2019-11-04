@@ -15,6 +15,7 @@
 import sys
 import json
 import torch
+import random
 import argparse
 import logging
 import os
@@ -128,11 +129,29 @@ def setup_train_args():
         '--notebook',
         action='store_true',
         help='Set true if you are using IPython notebook.')
+    group.add_argument(
+        '--seed',
+        type=int,
+        default=1111,
+        help='Random seed for training.')
 
     setup_data_args(parser)
     setup_model_args(parser)
 
     return parser.parse_args()
+
+
+def set_seed(args):
+    """
+    Sets the random seed for training.
+    """
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
+    if args.cuda:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def load_state(
@@ -267,6 +286,9 @@ def main():
 
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
+    
+    # setting random seed for reproducibility
+    set_seed(args)
 
     model_dir = join(
         args.model_dir, args.model, args.name)
