@@ -120,14 +120,11 @@ def decode(args, model, inputs, tokenizer,
         probs = softmax(logits, dim=-1)
         pred = torch.multinomial(probs, 1)
 
-        preds.append(pred.item())
-
         # breaking after eos_id is seen
-        if preds[-1] == eos_id:
+        if pred == eos_id:
             break
 
-    else:
-        preds.append(eos_id)
+        preds.append(pred.item())
 
     return preds
 

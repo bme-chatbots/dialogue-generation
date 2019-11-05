@@ -22,8 +22,13 @@ import os
 
 import numpy as np
 
+from contextlib import contextmanager
+from tabulate import tabulate
 from tensorboardX import SummaryWriter
-from collections import OrderedDict
+
+from collections import (
+    OrderedDict, defaultdict)
+
 from math import ceil
 from datetime import datetime
 from statistics import mean
@@ -116,11 +121,6 @@ def setup_train_args():
         default=4,
         help='Number of steps for grad accum.')
     group.add_argument(
-        '--eval_every_step',
-        type=int,
-        default=1500,
-        help='Evaluation frequency in steps.')
-    group.add_argument(
         '--local_rank',
         type=int,
         default=-1,
@@ -141,7 +141,7 @@ def setup_train_args():
     return parser.parse_args()
 
 
-def set_seed(args):
+def set_random_seed(args):
     """
     Sets the random seed for training.
     """
@@ -171,7 +171,7 @@ def load_state(
             model_path))
 
         return (
-            state_dict['val_loss'],
+            state_dict['valid_loss'],
             state_dict['epoch'],
             state_dict['step']
         )
@@ -190,12 +190,6 @@ def create_logger(model_dir):
 
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s')
-
-    # setting up logging to the console
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.DEBUG)
-    logger.addHandler(console_handler)
 
     # setting up logging to a file
     log_path = join(model_dir, 'training.log')
@@ -288,7 +282,7 @@ def main():
         and not args.no_cuda
     
     # setting random seed for reproducibility
-    set_seed(args)
+    set_random_seed(args)
 
     model_dir = join(
         args.model_dir, args.model, args.name)
@@ -351,7 +345,7 @@ def main():
             flush_secs=100)
 
     # loading previous state of the training
-    best_val_loss, init_epoch, step = load_state(
+    best_valid_loss, init_epoch, step = load_state(
         model_dir=model_dir, model=model,
         optimizer=optimizer, logger=logger,
         device=device)
@@ -378,6 +372,75 @@ def main():
     test_dataset, num_test_steps = test
 
     patience, skip, loss, accuracy = 0, 1, 0, 0
+
+    if master_process:
+        # loading history for training logs
+        history_path = join(model_dir, 'history.json')
+
+        history = defaultdict(list)
+
+        # NOTE the hardcoded values to keep track of
+        # in the history
+        headers = ['epoch', 'train_loss', 'valid_loss']
+
+        if exists(history_path):
+            with open(history_path, 'r') as fh:
+                history = json.load(fh)
+
+    def print_results(results):
+        """
+        Prints the history to the standard output.
+        """
+        data = list(zip(*[history[h] for h in headers]))
+
+        table = tabulate(
+            tabular_data=data, 
+            headers=headers, 
+            floatfmt='.3f')
+
+        # computing the tabular table string and
+        # printing only the last element
+        print(table.split('\n')[-1])
+
+        msg = ', '.join(
+            '{}: {}'.format(n, r) for 
+            n, r in results.items())
+
+        logger.info(msg)
+
+    def record_history(results):
+        """
+        Records the results and prints them.
+        """
+        # saving history and handling unexpected
+        # keyboard interrupt
+        for header in headers:
+            history[header].append(results[header])
+
+        while True:
+            try:
+                with open(history_path, 'w') as fh:
+                    json.dump(history, fh)
+                break
+            except KeyboardInterrupt:
+                pass
+            
+    @contextmanager
+    def skip_on_error():
+        """
+        Convenience function for skipping OOMs.
+        """
+        try:
+            yield
+
+        except RuntimeError as e:
+            # checking out of memory error and 
+            # proceeding if only a single GPU
+            # is used for the training
+            if 'out of memory' in str(e):
+                if args.distributed:
+                    raise e
+                skip += 1
 
     def reduce_tensor(tensor):
         """
@@ -450,6 +513,8 @@ def main():
             # more accurate logging
             loss = reduce_tensor(loss)
 
+        step += 1
+
         return loss.item(), accuracy
 
     def backward(loss):
@@ -489,12 +554,13 @@ def main():
         model.eval()
 
         for batch in loop:
-            loss, accuracy = forward_step(batch)
+            with skip_on_error():
+                loss, accuracy = forward_step(batch)
 
-            loop.set_postfix(ordered_dict=OrderedDict(
-                loss=loss.item(), acc=accuracy))
+                loop.set_postfix(OrderedDict(
+                    loss=loss.item(), acc=accuracy))
 
-            yield loss.item()
+                yield loss.item()
 
     def save_state():
         """
@@ -505,7 +571,7 @@ def main():
         state = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'val_loss': best_val_loss,
+            'valid_loss': best_valid_loss,
             'epoch': epoch + 1,
             'step': step
         }
@@ -523,7 +589,9 @@ def main():
     scheduler = LambdaLR(optimizer, compute_lr)
 
     if master_process:
-        logger.info(str(vars(args)))
+        train_args = str(vars(args))
+        logger.info(train_args)
+        print(train_args)
 
     try:
         # initializing cuda buffer to avoid OOM errors
@@ -550,6 +618,16 @@ def main():
         if args.distributed:
             return
 
+    # creating table of history with correctly
+    # arranged values for each header
+    if master_process:
+        table = list(zip(*[history[h] for h in headers]))
+
+        print(tabulate(
+            tabular_data=table, 
+            headers=headers, 
+            floatfmt='.3f'))
+
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
         loop = tqdm(
@@ -564,56 +642,19 @@ def main():
         model.train()
 
         for batch in loop:
-            try:
+            with skip_on_error():
                 loss, accuracy = train_step(batch)
-
-                step += 1
 
                 if master_process and loss is not None:
                     train_loss.append(loss)
 
                     # logging to tensorboard
-                    writer.add_scalar('train/loss', loss, step)
-                    writer.add_scalar('train/acc', accuracy, step)
+                    writer.add_scalar(
+                        'train/loss', loss, step)
+                    writer.add_scalar(
+                        'train/acc', accuracy, step)
 
-                if not step % args.eval_every_step:
-                    with torch.no_grad():
-                        val_loss = mean(evaluate(
-                            dataset=valid_dataset,
-                            num_steps=num_valid_steps))
-
-                    # switching back to training
-                    model.train()
-
-                    if master_process:
-                        logger.info('val loss: {:.4}'.format(
-                            val_loss))
-
-                        # logging to tensorboard
-                        writer.add_scalar(
-                            'val/loss', val_loss, step)
-
-                    if val_loss < best_val_loss:
-                        patience = 0
-                        best_val_loss = val_loss
-
-                        if master_process:
-                            save_state()
-
-                    else:
-                        patience += 1
-                        if patience == args.patience:
-                            # terminate when max patience
-                            # level is hit
-                            break
-
-            except RuntimeError as e:
-                if 'out of memory' in str(e):
-                    if args.distributed:
-                        raise e
-                    skip += 1
-
-            loop.set_postfix(ordered_dict=OrderedDict(
+            loop.set_postfix(OrderedDict(
                 loss=loss, acc=accuracy, skip=skip))
 
         if len(train_loss) > 0:
@@ -621,9 +662,41 @@ def main():
         else:
             train_loss = 0.0
 
+        with torch.no_grad():
+            valid_loss = mean(evaluate(
+                dataset=valid_dataset,
+                num_steps=num_valid_steps))
+
+        # switching back to training
+        model.train()
+
         if master_process:
-            logger.info('train loss: {:.4}'.format(
-                train_loss))
+            results = {
+                'epoch': epoch, 
+                'train_loss': train_loss,
+                'valid_loss': valid_loss
+            }
+
+            record_history(results)
+            print_results(results)
+
+            # logging to tensorboard
+            writer.add_scalar(
+                'val/loss', valid_loss, step)
+
+        if valid_loss < best_valid_loss:
+            patience = 0
+            best_valid_loss = valid_loss
+
+            if master_process:
+                save_state()
+
+        else:
+            patience += 1
+            if patience == args.patience:
+                # terminate when max patience
+                # level is hit
+                break
 
         scheduler.step()
 
