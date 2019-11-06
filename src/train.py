@@ -430,6 +430,8 @@ def main():
         """
         Convenience function for skipping OOMs.
         """
+        nonlocal skip
+        
         try:
             yield
 
