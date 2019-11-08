@@ -132,7 +132,7 @@ def setup_train_args():
     group.add_argument(
         '--seed',
         type=int,
-        default=1111,
+        default=None,
         help='Random seed for training.')
 
     setup_data_args(parser)
@@ -282,7 +282,8 @@ def main():
         and not args.no_cuda
     
     # setting random seed for reproducibility
-    set_random_seed(args)
+    if args.seed:
+        set_random_seed(args)
 
     model_dir = join(
         args.model_dir, args.model, args.name)
@@ -426,19 +427,19 @@ def main():
                 pass
             
     @contextmanager
-    def skip_on_error():
+    def skip_error():
         """
-        Convenience function for skipping OOMs.
+        Convenience function for skipping errors.
         """
         nonlocal skip
-        
-        try:
-            yield
 
-        except RuntimeError as e:
+        try:
             # checking out of memory error and 
             # proceeding if only a single GPU
             # is used for the training
+            yield
+
+        except RuntimeError as e:
             if 'out of memory' in str(e):
                 if args.distributed:
                     raise e
@@ -526,7 +527,8 @@ def main():
         """
         # cuda is required for mixed precision training.
         if args.mixed:
-            with amp.scale_loss(loss, optimizer) as scaled:
+            with amp.scale_loss(
+                    loss, optimizer) as scaled:
                 scaled.backward()
         else:
             loss.backward()
@@ -547,16 +549,14 @@ def main():
         the model.
         """
         loop = tqdm(
-            dataset(),
-            total=num_steps,
-            disable=not master_process,
-            desc='Eval',
-            leave=False)
+            dataset(), 'eval', 
+            num_steps, False,
+            disable=not master_process)
 
         model.eval()
 
         for batch in loop:
-            with skip_on_error():
+            with skip_error():
                 loss, accuracy = forward_step(batch)
 
                 loop.set_postfix(OrderedDict(
@@ -624,27 +624,21 @@ def main():
     # arranged values for each header
     if master_process:
         table = list(zip(*[history[h] for h in headers]))
-
-        print(tabulate(
-            tabular_data=table, 
-            headers=headers, 
-            floatfmt='.3f'))
+        print(tabulate(table, headers, floatfmt='.3f'))
 
     for epoch in range(init_epoch, args.max_epochs):
         # running training loop
         loop = tqdm(
-            train_dataset(),
-            total=num_train_steps,
-            disable=not master_process,
-            desc='Train {}'.format(epoch),
-            leave=False)
+            train_dataset(), 'train {}'.format(epoch),
+            num_train_steps, False, 
+            disable=not master_process)
 
         train_loss = []
 
         model.train()
 
         for batch in loop:
-            with skip_on_error():
+            with skip_error():
                 loss, accuracy = train_step(batch)
 
                 if master_process and loss is not None:
