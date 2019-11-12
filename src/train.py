@@ -149,6 +149,11 @@ def setup_train_args():
         action='store_true',
         help='Set true if you are using IPython notebook.')
     group.add_argument(
+        '--clip_grad',
+        type=float,
+        default=None,
+        help='Gradient clipping norm value.')
+    group.add_argument(
         '--seed',
         type=int,
         default=None,
@@ -228,7 +233,7 @@ def create_optimizer(args, parameters):
     optimizer = AdamW(
         lr=args.lr,
         params=parameters,
-        weight_decay=1e-6)
+        weight_decay=0.01)
 
     return optimizer
 
@@ -566,7 +571,9 @@ def main():
         loss /= args.grad_accum_steps
 
         backward(loss)
-        clip_grad_norm(1.0)
+
+        if args.clip_grad is not None:
+            clip_grad_norm(args.clip_grad)
 
         if step % args.grad_accum_steps == 0:
             set_lr_fn(step)

@@ -26,7 +26,7 @@ from src.model import (
     create_model,
     setup_model_args)
 
-from src.train import set_seed
+from src.train import set_random_seed
 
 from src.collate import PREPARE
 
@@ -68,7 +68,7 @@ def setup_interact_args():
     group.add_argument(
         '--seed',
         type=int,
-        default=1111,
+        default=None,
         help='Random seed for interactive mode.')
 
     setup_data_args(parser)
@@ -176,7 +176,8 @@ def main():
     args.cuda = not args.no_cuda and \
         torch.cuda.is_available()
 
-    set_seed(args)
+    if args.seed is not None:
+        set_random_seed(args)
 
     device = torch.device(
         'cuda' if args.cuda else 'cpu')

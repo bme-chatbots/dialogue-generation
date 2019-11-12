@@ -83,7 +83,7 @@ def setup_data_args(parser):
     group.add_argument(
         '--max_hist',
         type=int,
-        default=4,
+        default=2,
         help='Maximum number of turns in history.')
     group.add_argument(
         '--force_rebuild',
