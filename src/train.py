@@ -184,7 +184,7 @@ def load_state(
     Loads the model and optimizer state.
     """
     try:
-        model_path = join(model_dir, 'model.pt')
+        model_path = join(model_dir, 'last.pt')
         state_dict = torch.load(
             model_path, map_location=device)
 
@@ -633,11 +633,11 @@ def main():
 
                 yield loss.item()
 
-    def save_state():
+    def save_state(name):
         """
         Saves the model and optimizer state.
         """
-        model_path = join(model_dir, 'model.pt')
+        model_path = join(model_dir, name + '.pt')
 
         state = {
             'model': model.state_dict(),
@@ -747,12 +747,15 @@ def main():
             writer.add_scalar(
                 'val/loss', valid_loss, step)
 
+        if master_process:
+            save_state(name='last')
+
         if valid_loss < best_valid_loss:
             patience = 0
             best_valid_loss = valid_loss
 
             if master_process:
-                save_state()
+                save_state(name='best')
 
         else:
             patience += 1

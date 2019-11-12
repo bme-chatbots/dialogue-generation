@@ -45,6 +45,12 @@ def setup_interact_args():
         default=None,
         help='Path to the file of the model.')
     group.add_argument(
+        '--ckpt_name',
+        type=str,
+        default='last',
+        choices=['last', 'best'],
+        help='Name of the checkpoint to load.')
+    group.add_argument(
         '--method',
         type=str,
         default='nucleus',
@@ -196,6 +202,8 @@ def main():
         model_path,
         map_location=device)
 
+    del state_dict['optimizer']
+
     _, tokenizer, _ = create_dataset(
         args=args, master_process=True)
 
@@ -205,7 +213,7 @@ def main():
     model = model.to(device)
     
     try:
-        model.load_state_dict(state_dict['model'])
+        model.load_state_dict(state_dict.pop('model'))
         model.eval()
     except RuntimeError as e:
         print(
@@ -220,6 +228,8 @@ def main():
         )
 
         sys.exit()
+
+    print(str(state_dict))
 
     history = []
 
@@ -250,7 +260,7 @@ def main():
         history.append(preds)
 
         # last token is the end token
-        return tokenizer.decode(preds[:-1])
+        return tokenizer.decode(preds)
 
     print('Type a sentence to translate. ' +
           'CTRL + C to escape.')
