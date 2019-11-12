@@ -95,9 +95,9 @@ def setup_train_args():
         help='Device for training.')
     # TODO XLNet produces NaN with apex
     group.add_argument(
-        '--mixed',
+        '--fp16',
         action='store_true',
-        help='Use mixed precision training.')
+        help='Use fp16 precision training.')
     group.add_argument(
         '--lr',
         type=float,
@@ -343,11 +343,11 @@ def main():
     os.makedirs(model_dir, exist_ok=True)
     logger = create_logger(model_dir=model_dir)
 
-    if args.mixed and not APEX_INSTALLED:
+    if args.fp16 and not APEX_INSTALLED:
         logger.warn(
-            '--mixed passed but apex is not installed.')
+            '--fp16 passed but apex is not installed.')
 
-    args.mixed = args.mixed and APEX_INSTALLED \
+    args.fp16 = args.fp16 and APEX_INSTALLED \
         and args.cuda
 
     master_process = args.local_rank in [0, -1]
@@ -379,7 +379,7 @@ def main():
 
     # TODO fix xlnet nan with mixed precision
     if 'xlnet' in args.model:
-        args.mixed = False
+        args.fp16 = False
 
     model = create_model(
         args=args,
@@ -401,7 +401,7 @@ def main():
         optimizer=optimizer, logger=logger,
         device=device)
 
-    if args.mixed:
+    if args.fp16:
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
@@ -424,13 +424,16 @@ def main():
 
     patience, skip, loss, accuracy = 0, 1, 0, 0
 
+    d_model = model.config.d_model if 'xlnet' in \
+        args.model else model.config.n_embd
+
     set_lr_fn = partial(
         set_lr, 
         optimizer=optimizer, 
         schedule=args.schedule, 
         lr=args.lr, 
         warmup_steps=args.warmup_steps,
-        d_model=model.config.d_model)
+        d_model=d_model)
 
     if master_process:
         # loading history for training logs
@@ -519,7 +522,7 @@ def main():
         """
         inputs, targets = batch
 
-        outputs = model(inputs, half=args.mixed)
+        outputs = model(inputs, half=args.fp16)
 
         # converting targets from ndarray
         targets = torch.as_tensor(targets)
@@ -585,7 +588,7 @@ def main():
         normal precision mode.
         """
         # cuda is required for mixed precision training.
-        if args.mixed:
+        if args.fp16:
             with amp.scale_loss(
                     loss, optimizer) as scaled:
                 scaled.backward()
@@ -596,7 +599,7 @@ def main():
         """
         Applies gradient clipping.
         """
-        if args.mixed:
+        if args.fp16:
             clip_grad_norm_(
                 amp.master_params(optimizer), max_norm)
         else:
@@ -670,7 +673,7 @@ def main():
                 msg += ', use the `--checkpointed` flag'
 
             if not APEX_INSTALLED:
-                msg += ' or install apex for mixed precision'
+                msg += ' or install apex for fp16 precision'
 
             logger.info(msg + '.')
 
