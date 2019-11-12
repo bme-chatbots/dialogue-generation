@@ -102,7 +102,8 @@ COLLATE = {
     'distilgpt2':           gpt2_padded_collate,
     'gpt2':                 gpt2_padded_collate,
     'gpt2-medium':          gpt2_padded_collate,
-    'gpt2-large':           gpt2_padded_collate
+    'gpt2-large':           gpt2_padded_collate,
+    'gpt2-xl':              gpt2_padded_collate
 }
 
 
@@ -128,7 +129,8 @@ PREPARE = {
     'distilgpt2':           prepare_gpt2_inputs,
     'gpt2':                 prepare_gpt2_inputs,
     'gpt2-medium':          prepare_gpt2_inputs,
-    'gpt2-large':           prepare_gpt2_inputs
+    'gpt2-large':           prepare_gpt2_inputs,
+    'gpt2-xl':              prepare_gpt2_inputs
 }
 
 

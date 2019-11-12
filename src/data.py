@@ -366,7 +366,8 @@ TOKENIZER = {
     'distilgpt2':           GPT2Tokenizer,
     'gpt2':                 GPT2Tokenizer,
     'gpt2-medium':          GPT2Tokenizer,
-    'gpt2-large':           GPT2Tokenizer
+    'gpt2-large':           GPT2Tokenizer,
+    'gpt2-xl':              GPT2Tokenizer
 }
 
 

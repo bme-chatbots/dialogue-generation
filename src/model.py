@@ -278,5 +278,6 @@ MODEL = {
     'distilgpt2':           create_gpt2_model,
     'gpt2':                 create_gpt2_model,
     'gpt2-medium':          create_gpt2_model,
-    'gpt2-large':           create_gpt2_model
+    'gpt2-large':           create_gpt2_model,
+    'gpt2-xl':              create_gpt2_model
 }
