@@ -38,7 +38,7 @@ You can also use predefined configs by passing the path of the config json file 
 python -m src.train --config src/configs/xlnet-dailydialog.json
 ```
 
-Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`distilgpt2`** **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`** but you can easily extend them by adding your own. Example to create your own dataset can be seen below.
+Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`distilgpt2`** **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**, **`gpt2-xl`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`** but you can easily extend them by adding your own. Example to create your own dataset can be seen below.
 
 Training the model is fast and easy on *[Google Colaboratory](https://colab.research.google.com/notebooks/welcome.ipynb)* or *[Kaggle kernel](https://www.kaggle.com/kernels)*, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with the new Tesla P100 or Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older Tesla K80 version. You can check the current type by running `!nvidia-smi` in a cell of your colab.
 

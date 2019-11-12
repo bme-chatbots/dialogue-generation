@@ -12,6 +12,14 @@
 # pylint: disable=not-callable
 # pylint: disable=used-before-assignment
 
+from src.data import (
+    create_dataset,
+    setup_data_args,
+    create_dummy_batch)
+from src.model import (
+    compute_size,
+    create_model,
+    setup_model_args)
 import sys
 import json
 import torch
@@ -32,6 +40,7 @@ from collections import (
 from math import ceil
 from datetime import datetime
 from statistics import mean
+from functools import partial
 
 try:
     from apex import amp
@@ -51,8 +60,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.nn.parallel import (
     DistributedDataParallel)
 
-from transformers import (
-    WarmupLinearSchedule, AdamW)
+from transformers import AdamW
 
 from os.path import (
     exists, join,
@@ -63,16 +71,6 @@ from os.path import (
 PROJECT_PATH = join(abspath(dirname(__file__)), '..')
 if PROJECT_PATH not in sys.path:
     sys.path.append(PROJECT_PATH)
-
-from src.model import (
-    compute_size,
-    create_model,
-    setup_model_args)
-    
-from src.data import (
-    create_dataset,
-    setup_data_args,
-    create_dummy_batch)
 
 
 def setup_train_args():
@@ -101,9 +99,9 @@ def setup_train_args():
         action='store_true',
         help='Use mixed precision training.')
     group.add_argument(
-        '--learning_rate',
+        '--lr',
         type=float,
-        default=1e-4,
+        default=1e-5,
         help='Learning rate for the model.')
     group.add_argument(
         '--batch_size',
@@ -116,9 +114,30 @@ def setup_train_args():
         default=5,
         help='Number of patience epochs before termination.')
     group.add_argument(
+        '--schedule',
+        type=str,
+        default='noam',
+        choices=['noam', 'noamwd'],
+        help='Type of learning rate scheduling.')
+    group.add_argument(
+        '--warmup_prop',
+        type=float,
+        default=0.1,
+        help='Percentage of total steps for warmup.')
+    group.add_argument(
+        '--warmup_steps',
+        type=int,
+        default=16000,
+        help='Number of warmup steps.')
+    group.add_argument(
+        '--total_steps',
+        type=int,
+        default=1000000,
+        help='Number of optimization steps.')
+    group.add_argument(
         '--grad_accum_steps',
         type=int,
-        default=4,
+        default=2,
         help='Number of steps for grad accum.')
     group.add_argument(
         '--local_rank',
@@ -207,24 +226,57 @@ def create_optimizer(args, parameters):
     Creates an adam optimizer.
     """
     optimizer = AdamW(
-        lr=args.learning_rate,
+        lr=args.lr,
         params=parameters,
         weight_decay=1e-6)
 
     return optimizer
 
 
-def compute_lr(step, factor=3e-3, warmup=3, eps=1e-7):
+# implementation is from DialoGPT repo
+def noam_decay(step, warmup_steps, d_model):
     """
-    Calculates learning rate with warm up.
+    Learning rate schedule described in
+    https://arxiv.org/pdf/1706.03762.pdf.
     """
-    if step < warmup:
-        return (1 + factor) ** step
-    else:
-        # after reaching maximum number of steps
-        # the lr is decreased by factor as well
-        return max(((1 + factor) ** warmup) *
-                   ((1 - factor) ** (step - warmup)), eps)
+    return (
+        d_model ** (-0.5) * min(step ** (-0.5), 
+        step * warmup_steps**(-1.5)))
+
+
+# implementation is from DialoGPT repo
+def noamwd_decay(
+        step, warmup_steps, d_model, rate=0.5,
+        decay_steps=1000, start_step=500):
+    """
+    Learning rate schedule optimized for huge batches.
+    """
+    rate_exp = max(step - start_step + decay_steps, 0) \
+        // decay_steps
+
+    return (
+        d_model ** (-0.5) *  min(step ** (-0.5), 
+        step * warmup_steps**(-1.5)) *
+        rate ** (rate_exp))
+
+
+# implementation is from DialoGPT repo
+def set_lr(step, optimizer, schedule, lr,
+           warmup_steps, d_model):
+    """
+    Learning rate scheduler that applies either
+    noam or noamwd rule.
+    """
+    if schedule == 'noam':
+        lr_this_step = lr * 1e4 * \
+            noam_decay(step + 1, warmup_steps, d_model)
+
+    elif schedule == 'noamwd':
+        lr_this_step = lr * 1e4 * noamwd_decay(
+            step + 1, warmup_steps, d_model)
+
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr_this_step
 
 
 def compute_loss(outputs, targets, ignore_idx):
@@ -280,7 +332,7 @@ def main():
 
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
-    
+
     # setting random seed for reproducibility
     if args.seed:
         set_random_seed(args)
@@ -289,7 +341,6 @@ def main():
         args.model_dir, args.model, args.name)
 
     os.makedirs(model_dir, exist_ok=True)
-
     logger = create_logger(model_dir=model_dir)
 
     if args.mixed and not APEX_INSTALLED:
@@ -331,7 +382,7 @@ def main():
         args.mixed = False
 
     model = create_model(
-        args=args, 
+        args=args,
         model_dir=model_dir,
         vocab_size=vocab_size)
 
@@ -342,8 +393,7 @@ def main():
 
     if master_process:
         writer = SummaryWriter(
-            logdir=model_dir,
-            flush_secs=100)
+            logdir=model_dir, flush_secs=100)
 
     # loading previous state of the training
     best_valid_loss, init_epoch, step = load_state(
@@ -374,6 +424,14 @@ def main():
 
     patience, skip, loss, accuracy = 0, 1, 0, 0
 
+    set_lr_fn = partial(
+        set_lr, 
+        optimizer=optimizer, 
+        schedule=args.schedule, 
+        lr=args.lr, 
+        warmup_steps=args.warmup_steps,
+        d_model=model.config.d_model)
+
     if master_process:
         # loading history for training logs
         history_path = join(model_dir, 'history.json')
@@ -395,8 +453,8 @@ def main():
         data = list(zip(*[history[h] for h in headers]))
 
         table = tabulate(
-            tabular_data=data, 
-            headers=headers, 
+            tabular_data=data,
+            headers=headers,
             floatfmt='.3f')
 
         # computing the tabular table string and
@@ -404,7 +462,7 @@ def main():
         print(table.split('\n')[-1])
 
         msg = ', '.join(
-            '{}: {}'.format(n, r) for 
+            '{}: {}'.format(n, r) for
             n, r in results.items())
 
         logger.info(msg)
@@ -425,7 +483,7 @@ def main():
                 break
             except KeyboardInterrupt:
                 pass
-            
+
     @contextmanager
     def skip_error():
         """
@@ -434,7 +492,7 @@ def main():
         nonlocal skip
 
         try:
-            # checking out of memory error and 
+            # checking out of memory error and
             # proceeding if only a single GPU
             # is used for the training
             yield
@@ -508,6 +566,7 @@ def main():
         clip_grad_norm(1.0)
 
         if step % args.grad_accum_steps == 0:
+            set_lr_fn(step)
             optimizer.step()
             optimizer.zero_grad()
 
@@ -549,7 +608,7 @@ def main():
         the model.
         """
         loop = tqdm(
-            dataset(), 'eval', 
+            dataset(), 'eval',
             num_steps, False,
             disable=not master_process)
 
@@ -588,8 +647,6 @@ def main():
             except KeyboardInterrupt:
                 pass
 
-    scheduler = LambdaLR(optimizer, compute_lr)
-
     if master_process:
         train_args = str(vars(args))
         logger.info(train_args)
@@ -611,7 +668,7 @@ def main():
 
             if not args.grad_ckpt:
                 msg += ', use the `--checkpointed` flag'
-            
+
             if not APEX_INSTALLED:
                 msg += ' or install apex for mixed precision'
 
@@ -630,7 +687,7 @@ def main():
         # running training loop
         loop = tqdm(
             train_dataset(), 'train {}'.format(epoch),
-            num_train_steps, False, 
+            num_train_steps, False,
             disable=not master_process)
 
         train_loss = []
@@ -668,7 +725,7 @@ def main():
 
         if master_process:
             results = {
-                'epoch': epoch, 
+                'epoch': epoch,
                 'train_loss': train_loss,
                 'valid_loss': valid_loss
             }
@@ -694,7 +751,8 @@ def main():
                 # level is hit
                 break
 
-        scheduler.step()
+        if step == args.total_steps:
+            break
 
     if master_process:
         writer.close()
