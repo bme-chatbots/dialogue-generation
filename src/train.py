@@ -16,10 +16,12 @@ from src.data import (
     create_dataset,
     setup_data_args,
     create_dummy_batch)
+
 from src.model import (
     compute_size,
     create_model,
     setup_model_args)
+    
 import sys
 import json
 import torch
@@ -119,11 +121,6 @@ def setup_train_args():
         default='noam',
         choices=['noam', 'noamwd'],
         help='Type of learning rate scheduling.')
-    group.add_argument(
-        '--warmup_prop',
-        type=float,
-        default=0.1,
-        help='Percentage of total steps for warmup.')
     group.add_argument(
         '--warmup_steps',
         type=int,

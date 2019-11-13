@@ -66,7 +66,63 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 %tensorboard --logdir "dialogue-generation/model"
 ```
 
-The model can be trained then by simply running the `train` script with the default parameters.
+The model can be trained then by simply running the `train` script with the default flags. Flags for the training scripts with the default values are the following.
+
+**`train`**
+
+- `--config` *Path of the config file that contains preset flags ( not required ). ( default: None )*
+
+- `--max_epochs` *Maximum number of epochs for training. ( default: 25 )*
+
+- `--no_cuda` *Do not use GPU for training. ( default: False )*
+
+- `--fp16` *Use half-precision training if Apex is installed. ( default: False )*
+
+- `--lr` *Learning rate for the optimizer. ( default: 1e-5 )*
+
+- `--batch_size` *Batch size for training and validation. ( default: 64 )*
+
+- `--patience` *Number of epochs without progress before early stopping. ( default: 5 )*
+
+- `--schedule` *Type of learning rate scheduling to use. ( default: noam )*
+
+- `--warmup_steps` *Number of warmup steps. ( this is not in epochs ) ( default: 0.1 )*
+
+- `--total_steps` *Number of total optimization steps. ( default: 1000000 )*
+
+- `--grad_accum_steps` *Number of steps for gradient accumulation. ( default: 2 )*
+
+- `--notebook` *If true the prograssbar is set to notebook mode. ( bugged in dark theme ) ( default: False )*
+
+- `--clip_grad` *Use gradient clipping with the value if provided. ( default: None )*
+
+- `--seed` *Random seed for the training. ( default: None )*
+
+**`model`**
+
+- `--model` *Name of model for training. ( default: xlnet-base-cased )*
+
+- `--grad_ckpt` *Use gradient checkpointing. ( default: False )*
+
+- `--name` *Name of the current training session. ( default: %y.%m.%d-%H:%M:%S )*
+
+- `--model_dir` *Path of the model root directory. ( default: `<PROJECT_DIR>`/model )*
+
+**`data`**
+
+- `--data` *Name of the dataset to use for training. ( default: dailydialog )*
+
+- `--data_dir` *Path of the root data directory. ( default: `<PROJECT_DIR>`/data )*
+
+- `--download_dir` *Path of download root directory. ( default: `<PROJECT_DIR>`/data )*
+
+- `--file_size` *Maximum number of utterances stored in a single file. ( default: 100000 )*
+
+- `--max_hist` *Number of utterances in the history. ( default: 2 )*
+
+- `--force_rebuild` *Recreate the data even if it exists. ( default: False )*
+
+- `--max_len` *Maximum number of tokens in a single utterance. ( max_seq_len is max_len * max_hist ) ( default: 50 )*
 
 ```bash
 !cd dialogue-generation; python -m src.train
@@ -85,6 +141,24 @@ FileLink(r'dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt')
 ## Interaction
 
 An interactive evaluation mode is available on the trained model by running the `interact` script and providing the path of the trained model with `--model_file`. You can also provide the `--config` file or just simply give the same `--model` and `--name` argument, which was used during training.
+
+**`interact`**
+
+- `--model_file` *Name of the model file; ( default: None )*
+
+- `--ckpt_name` *If loading model by `--name` and not `--model_file` use the `last` or `best` version ( default: `last` )*
+
+- `--method` *Decoding method for interaction ( default: nucleus )*
+
+- `--no_cuda` *Do not use GPU for training. ( default: False )*
+
+- `--top_p` *Top-p parameter for nucleus decoding. ( default: 0.9 )*
+
+- `--top_p` *Top-k parameter for topk sampling. ( default: 100 )*
+
+- `--seed` *Random seed for the training. ( default: None )*
+
+**`model`** and **`data`** arguments are the same.
 
 ```console
 python -m src.interact --model gpt2-medium --name my_test_run
