@@ -68,6 +68,10 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 
 The model can be trained then by simply running the `train` script with the default flags. Flags for the training scripts with the default values are the following.
 
+```bash
+!cd dialogue-generation; python -m src.train
+```
+
 **`train`**
 
 - `--config` *Path of the config file that contains flags. ( default: None )*
@@ -123,10 +127,6 @@ The model can be trained then by simply running the `train` script with the defa
 - `--force_rebuild` *Recreate the data even if it exists. ( default: False )*
 
 - `--max_len` *Maximum length of an utterance. ( default: 50 )*
-
-```bash
-!cd dialogue-generation; python -m src.train
-```
 
 After training the model can be downloaded by setting the download link in the following snippet to the one logged by the script after evaluation. ( `Saving model to dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt` )
 
