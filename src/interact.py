@@ -196,11 +196,10 @@ def main():
 
     model_path = args.model_file if \
         args.model_file else \
-        join(model_dir, 'model.pt')
+        join(model_dir, args.ckpt_name + '.pt')
     
     state_dict = torch.load(
-        model_path,
-        map_location=device)
+        model_path, map_location=device)
 
     del state_dict['optimizer']
 
