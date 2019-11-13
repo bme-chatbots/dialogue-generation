@@ -70,31 +70,31 @@ The model can be trained then by simply running the `train` script with the defa
 
 **`train`**
 
-- `--config` *Path of the config file that contains preset flags ( not required ). ( default: None )*
+- `--config` *Path of the config file that contains flags. ( default: None )*
 
 - `--max_epochs` *Maximum number of epochs for training. ( default: 25 )*
 
 - `--no_cuda` *Do not use GPU for training. ( default: False )*
 
-- `--fp16` *Use half-precision training if Apex is installed. ( default: False )*
+- `--fp16` *Use half-precision training. ( default: False )*
 
 - `--lr` *Learning rate for the optimizer. ( default: 1e-5 )*
 
 - `--batch_size` *Batch size for training and validation. ( default: 64 )*
 
-- `--patience` *Number of epochs without progress before early stopping. ( default: 5 )*
+- `--patience` *Patience value for early stopping. ( default: 5 )*
 
 - `--schedule` *Type of learning rate scheduling to use. ( default: noam )*
 
-- `--warmup_steps` *Number of warmup steps. ( this is not in epochs ) ( default: 0.1 )*
+- `--warmup_steps` *Number of warmup steps. ( default: 0.1 )*
 
 - `--total_steps` *Number of total optimization steps. ( default: 1000000 )*
 
-- `--grad_accum_steps` *Number of steps for gradient accumulation. ( default: 2 )*
+- `--grad_accum_steps` *Number of steps for grad accum. ( default: 2 )*
 
-- `--notebook` *If true the prograssbar is set to notebook mode. ( bugged in dark theme ) ( default: False )*
+- `--notebook` *Render progressbar in notebook mode. ( default: False )*
 
-- `--clip_grad` *Use gradient clipping with the value if provided. ( default: None )*
+- `--clip_grad` *Value of gradient clipping. ( default: None )*
 
 - `--seed` *Random seed for the training. ( default: None )*
 
@@ -116,13 +116,13 @@ The model can be trained then by simply running the `train` script with the defa
 
 - `--download_dir` *Path of download root directory. ( default: `<PROJECT_DIR>`/data )*
 
-- `--file_size` *Maximum number of utterances stored in a single file. ( default: 100000 )*
+- `--file_size` *Max utterances stored in a single file. ( default: 100000 )*
 
-- `--max_hist` *Number of utterances in the history. ( default: 2 )*
+- `--max_hist` *Num utterances in the history. ( default: 2 )*
 
 - `--force_rebuild` *Recreate the data even if it exists. ( default: False )*
 
-- `--max_len` *Maximum number of tokens in a single utterance. ( max_seq_len is max_len * max_hist ) ( default: 50 )*
+- `--max_len` *Maximum length of an utterance. ( default: 50 )*
 
 ```bash
 !cd dialogue-generation; python -m src.train
