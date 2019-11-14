@@ -74,64 +74,64 @@ The model can be trained then by simply running the `train` script with the defa
 
 **`train`**
 
-```text
---config : Path of the config file that contains flags. ( default: None )
+```bash
+--config # Path of the config file that contains flags. ( default: None )
 
---max_epochs : Maximum number of epochs for training. ( default: 25 )
+--max_epochs # Maximum number of epochs for training. ( default: 25 )
 
---no_cuda : Do not use GPU for training. ( default: False )
+--no_cuda # Do not use GPU for training. ( default: False )
 
---fp16 : Use half-precision training. ( default: False )
+--fp16 # Use half-precision training. ( default: False )
 
---lr : Learning rate for the optimizer. ( default: 1e-5 )
+--lr # Learning rate for the optimizer. ( default: 1e-5 )
 
---batch_size : Batch size for training and validation. ( default: 64 )
+--batch_size # Batch size for training and validation. ( default: 64 )
 
---patience : Patience value for early stopping. ( default: 5 )
+--patience # Patience value for early stopping. ( default: 5 )
 
---schedule : Type of learning rate scheduling to use. ( default: noam )
+--schedule # Type of learning rate scheduling to use. ( default: noam )
 
---warmup_steps : Number of warmup steps. ( default: 0.1 )
+--warmup_steps # Number of warmup steps. ( default: 0.1 )
 
---total_steps : Number of total optimization steps. ( default: 1000000 )
+--total_steps # Number of total optimization steps. ( default: 1000000 )
 
---grad_accum_steps : Number of steps for grad accum. ( default: 2 )
+--grad_accum_steps # Number of steps for grad accum. ( default: 2 )
 
---notebook : Render progressbar in notebook mode. ( default: False )
+--notebook # Render progressbar in notebook mode. ( default: False )
 
---clip_grad : Value of gradient clipping. ( default: None )
+--clip_grad # Value of gradient clipping. ( default: None )
 
---seed : Random seed for the training. ( default: None )
+--seed # Random seed for the training. ( default: None )
 ```
 
 **`model`**
 
-```text
---model : Name of model for training. ( default: xlnet-base-cased )
+```bash
+--model # Name of model for training. ( default: xlnet-base-cased )
 
---grad_ckpt : Use gradient checkpointing. ( default: False )
+--grad_ckpt # Use gradient checkpointing. ( default: False )
 
---name Name : of the current training session. ( default: %y.%m.%d-%H:%M:%S )
+--name Name # of the current training session. ( default: %y.%m.%d-%H:%M:%S )
 
---model_dir : Path of the model root directory. ( default: `<PROJECT_DIR>`/model )
+--model_dir # Path of the model root directory. ( default: `<PROJECT_DIR>`/model )
 ```
 
 **`data`**
 
-```text
---data : Name of the dataset to use for training. ( default: dailydialog )
+```bash
+--data # Name of the dataset to use for training. ( default: dailydialog )
 
---data_dir : Path of the root data directory. ( default: `<PROJECT_DIR>`/data )
+--data_dir # Path of the root data directory. ( default: `<PROJECT_DIR>`/data )
 
---download_dir : Path of download root directory. ( default: `<PROJECT_DIR>`/data )
+--download_dir # Path of download root directory. ( default: `<PROJECT_DIR>`/data )
 
---file_size : Max utterances stored in a single file. ( default: 100000 )
+--file_size # Max utterances stored in a single file. ( default: 100000 )
 
---max_hist : Num utterances in the history. ( default: 2 )
+--max_hist # Num utterances in the history. ( default: 2 )
 
---force_rebuild : Recreate the data even if it exists. ( default: False )
+--force_rebuild # Recreate the data even if it exists. ( default: False )
 
---max_len : Maximum length of an utterance. ( default: 50 )
+--max_len # Maximum length of an utterance. ( default: 50 )
 ```
 
 After training the model can be downloaded by setting the download link in the following snippet to the one logged by the script after evaluation. ( `Saving model to dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt` )
@@ -150,20 +150,20 @@ An interactive evaluation mode is available on the trained model by running the 
 
 **`interact`**
 
-```text
---model_file : Name of the model file; ( default: None )
+```bash
+--model_file # Name of the model file; ( default: None )
 
---ckpt_name : If loading model by `--name` and not `--model_file` use the `last` or `best` version ( default: `last` )
+--ckpt_name # If loading model by `--name` and not `--model_file` use the `last` or `best` version ( default: `last` )
 
---method : Decoding method for interaction ( default: nucleus )
+--method # Decoding method for interaction ( default: nucleus )
 
---no_cuda : Do not use GPU for training. ( default: False )
+--no_cuda # Do not use GPU for training. ( default: False )
 
---top_p : Top-p parameter for nucleus decoding. ( default: 0.9 )
+--top_p # Top-p parameter for nucleus decoding. ( default: 0.9 )
 
---top_p : Top-k parameter for topk sampling. ( default: 100 )
+--top_p # Top-k parameter for topk sampling. ( default: 100 )
 
---seed : Random seed for the training. ( default: None )
+--seed # Random seed for the training. ( default: None )
 ```
 
 **`model`** and **`data`** arguments are the same.
