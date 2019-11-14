@@ -90,9 +90,12 @@ def decode(args, model, inputs, tokenizer,
     """
     input_ids, token_type_ids = inputs
 
+    if 'xlnet' in args.model:
+        mask_id = tokenizer.convert_tokens_to_ids(
+            tokenizer.mask_token)
+
     mask_id, rsp_id, eos_id = \
         tokenizer.convert_tokens_to_ids([
-            tokenizer.mask_token,
             RSP,
             tokenizer.eos_token
         ])
