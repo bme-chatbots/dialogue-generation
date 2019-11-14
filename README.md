@@ -72,7 +72,7 @@ The model can be trained then by simply running the `train` script with the defa
 !cd dialogue-generation; python -m src.train
 ```
 
-**`train`**
+**`train`** related arguments for the `train.py` script.
 
 ```bash
 --config # Path of the config file that contains flags. ( default: None )
@@ -104,7 +104,7 @@ The model can be trained then by simply running the `train` script with the defa
 --seed # Random seed for the training. ( default: None )
 ```
 
-**`model`**
+**`model`** related arguments for the `train.py` script.
 
 ```bash
 --model # Name of model for training. ( default: xlnet-base-cased )
@@ -116,7 +116,7 @@ The model can be trained then by simply running the `train` script with the defa
 --model_dir # Path of the model root directory. ( default: `<PROJECT_DIR>`/model )
 ```
 
-**`data`**
+**`data`** related arguments for the `train.py` script.
 
 ```bash
 --data # Name of the dataset to use for training. ( default: dailydialog )
@@ -148,7 +148,7 @@ FileLink(r'dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt')
 
 An interactive evaluation mode is available on the trained model by running the `interact` script and providing the path of the trained model with `--model_file`. You can also provide the `--config` file or just simply give the same `--model` and `--name` argument, which was used during training.
 
-**`interact`**
+**`interact`** related arguments for the `interact.py` script.
 
 ```bash
 --model_file # Name of the model file; ( default: None )
