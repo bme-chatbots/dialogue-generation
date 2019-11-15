@@ -45,7 +45,7 @@ from torch.nn.functional import (
     nll_loss)
 
 from torch.distributed import (
-    all_reduce, ReduceOp)
+    all_reduce, ReduceOp, barrier)
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.utils import clip_grad_norm_
@@ -372,6 +372,21 @@ def main():
 
     # creating dataset and storing dataset splits
     # as individual variables for convenience
+
+    if args.distributed:
+        # creating the dataset and model only on
+        # a single process ( downloading )
+        if master_process:
+            _, tokenizer, _ = create_dataset(
+                args, master_process)
+
+            vocab_size = len(tokenizer)
+
+            create_model(args, model_dir, vocab_size)
+
+        # other threads are waiting for the data init
+        barrier()
+
     datasets, tokenizer, max_len = create_dataset(
         args=args, master_process=master_process)
 
@@ -379,16 +394,12 @@ def main():
         tokenizer.pad_token)
     vocab_size = len(tokenizer)
 
+    model = create_model(args, model_dir, vocab_size)
+    model = model.to(device)
+
     # TODO fix xlnet nan with mixed precision
     if 'xlnet' in args.model:
         args.fp16 = False
-
-    model = create_model(
-        args=args,
-        model_dir=model_dir,
-        vocab_size=vocab_size)
-
-    model = model.to(device)
 
     optimizer = create_optimizer(
         args=args, parameters=model.parameters())
