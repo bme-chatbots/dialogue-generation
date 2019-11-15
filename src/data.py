@@ -28,8 +28,6 @@ from torch.utils.data import (
     Dataset, DataLoader,
     Sampler)
 
-from torch.distributed import barrier
-
 from torch.utils.data.distributed import (
     DistributedSampler)
 
@@ -477,11 +475,6 @@ def create_dataset(args, master_process):
                 }, fh)
             except KeyboardInterrupt:
                 shutil.rmtree(metadata_path)
-
-    if args.distributed:
-        # synchronizing processes before creating
-        # data loaders
-        barrier()
 
     with open(metadata_path, 'r') as fh:
         filenames = json.load(fh)
