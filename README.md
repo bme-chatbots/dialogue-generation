@@ -66,13 +66,13 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 %tensorboard --logdir "dialogue-generation/model"
 ```
 
-The model can be trained then by simply running the `train` script with the default flags. Flags for the training scripts with the default values are the following.
+The model can be trained then by simply running the `train` script with the default flags.
 
 ```bash
 !cd dialogue-generation; python -m src.train
 ```
 
-**`train`** related arguments for the `train.py` script.
+**`training`** related arguments for the `train.py` script. Setting these arguments will effect only the current training session, and are not saved for resuming the training in the future ( only the model and optimizer state is saved ).
 
 ```bash
 --config # Path of the config file that contains flags. ( default: None )
@@ -104,7 +104,7 @@ The model can be trained then by simply running the `train` script with the defa
 --seed # Random seed for the training. ( default: None )
 ```
 
-**`model`** related arguments for the `train.py` script.
+**`model`** related arguments for the `train.py` script. Note that `--grad_ckpt` is persistent setting so if a model is trained with this flag on, after reloading for further training or interaction this flag has to be passed again.
 
 ```bash
 --model # Name of model for training. ( default: xlnet-base-cased )
@@ -116,7 +116,7 @@ The model can be trained then by simply running the `train` script with the defa
 --model_dir # Path of the model root directory. ( default: `<PROJECT_DIR>`/model )
 ```
 
-**`data`** related arguments for the `train.py` script.
+**`data`** related arguments for the `train.py` script. Note that changing the `--file_size` or `--max_hist` will result in generating a new version of the serialized data. `--max_len` argument, however can be changed without further data generation as sentences are truncated during training on the fly.
 
 ```bash
 --data # Name of the dataset to use for training. ( default: dailydialog )
@@ -166,7 +166,7 @@ An interactive evaluation mode is available on the trained model by running the 
 --seed # Random seed for the training. ( default: None )
 ```
 
-**`model`** and **`data`** arguments are the same.
+**`model`** and **`data`** arguments are also accepted ( e.g. setting `--max_hist` to different value during interaction will enable the model to accept longer context, even if it was trained with a lower history length ).
 
 ```console
 python -m src.interact --model gpt2-medium --name my_test_run

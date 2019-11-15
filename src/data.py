@@ -11,6 +11,7 @@
 
 import torch
 import requests
+import hashlib
 import shutil
 import os
 import random
@@ -114,13 +115,26 @@ def generate_num_elements(iterable, num_elements):
         yield element
 
 
-def save_examples(args, content, name, tokenizer):
+def hash_data(args):
+    """
+    Creates a unique identifier for the special tokens
+    and tokenzier type.
+    """
+    string = '{}{}'.format(
+        args.max_hist, args.file_size)
+    encoded = string.encode()
+
+    num = int(hashlib.sha1(encoded).hexdigest(), 16)
+
+    return str(num)[-8:]
+
+
+def save_examples(
+        args, content, name, tokenizer, data_dir):
     """
     Creates numericalizes examples from a raw data
     file and serializes them.
     """
-    data_dir = join(
-        args.data_dir, args.data, args.model)
  
     # during data preprocessing the history
     # and target utterances are saved only once
@@ -204,7 +218,10 @@ def generate_dialogs(args, content, tokenizer):
                 yield (dialog_idx, begin_idx,
                        end_idx, example_len)
 
-    for idx, dialog in tqdm(enumerate(content)):
+    for idx, dialog in tqdm(
+            enumerate(content), 
+            desc='transforming dataset',
+            leave=False):
         dialog = [tokenizer.encode(u) for u in dialog]
 
         # generating indices list that indexes into
@@ -419,8 +436,11 @@ def create_dataset(args, master_process):
     Downloads the dataset, converts it to tokens and 
     returns iterators over the train and test splits.
     """
+    data_hash = hash_data(args)
+
     data_dir = join(
-        args.data_dir, args.data, args.model)
+        args.data_dir, args.data, args.model,
+        data_hash)
 
     os.makedirs(data_dir, exist_ok=True)
 
@@ -437,7 +457,8 @@ def create_dataset(args, master_process):
         files = dataset_cls.download(args=args)
 
         train, valid, test = dataset_cls.transform(
-            args=args, files=files, tokenizer=tokenizer)
+            args=args, files=files, 
+            tokenizer=tokenizer, data_dir=data_dir)
 
         train_files, train_size = train
         valid_files, valid_size = valid
@@ -451,7 +472,8 @@ def create_dataset(args, master_process):
                 json.dump({
                     'train': [train_files, train_size],
                     'valid': [valid_files, valid_size],
-                    'test': [test_files, test_size]
+                    'test': [test_files, test_size],
+                    'max_hist': args.max_hist,
                 }, fh)
             except KeyboardInterrupt:
                 shutil.rmtree(metadata_path)
@@ -600,7 +622,8 @@ def download(download_path, url):
         # data size in MBs
         loop = response.iter_content(2 ** 20)
         loop = tqdm(
-            loop, unit='MB', unit_scale=True)
+            loop, leave=False, unit='MB', 
+            unit_scale=True)
 
         with open(download_path, 'wb') as f:
             for chunk in loop:
@@ -674,19 +697,18 @@ class DialogDataset(Dataset):
         raise NotImplementedError('Abstract method.')
 
     @classmethod
-    def transform(cls, args, files, tokenizer):
+    def transform(cls, args, files, tokenizer, data_dir):
         """
         Transforms the dataset into numericalized
         format and saves it in fragments.
         """
-        print('Transforming dataset')
-
         for content, name in cls.generate_splits(files):
             yield save_examples(
                 args=args,
                 content=content,
                 name=name,
-                tokenizer=tokenizer)
+                tokenizer=tokenizer,
+                data_dir=data_dir)
 
     @classmethod
     def subclasses(cls):
