@@ -14,7 +14,16 @@ import sys
 import argparse
 import torch
 
-from os.path import join
+from tabulate import tabulate
+
+from os.path import (
+    join, abspath, dirname)
+
+# HACK to enable launching with
+# python src/train.py
+PROJECT_PATH = join(abspath(dirname(__file__)), '..')
+if PROJECT_PATH not in sys.path:
+    sys.path.append(PROJECT_PATH)
 
 from src.data import (
     setup_data_args,
@@ -94,7 +103,7 @@ def decode(args, model, inputs, tokenizer,
         mask_id = tokenizer.convert_tokens_to_ids(
             tokenizer.mask_token)
 
-    mask_id, rsp_id, eos_id = \
+    rsp_id, eos_id = \
         tokenizer.convert_tokens_to_ids([
             RSP,
             tokenizer.eos_token
@@ -231,7 +240,9 @@ def main():
 
         sys.exit()
 
-    print(str(state_dict))
+    print()
+    print(tabulate(state_dict.items(), tablefmt='presto'))
+    print()
 
     history = []
 
@@ -264,15 +275,15 @@ def main():
         # last token is the end token
         return tokenizer.decode(preds)
 
-    print('Type a sentence to translate. ' +
+    print('Type a sentence for response. ' +
           'CTRL + C to escape.')
 
     while True:
         try:
             print()
-            text = input()
+            text = input('User: ')
             output = respond(text)
-            print(output)
+            print('Bot: {}'.format(output))
             print()
 
         except KeyboardInterrupt:

@@ -655,9 +655,11 @@ def main():
                 pass
 
     if master_process:
-        train_args = str(vars(args))
-        logger.info(train_args)
-        print(train_args)
+        train_args = vars(args)
+        logger.info(str(train_args))
+        print()
+        print(tabulate(train_args.items(), tablefmt='presto'))
+        print()
 
     try:
         # initializing cuda buffer to avoid OOM errors
