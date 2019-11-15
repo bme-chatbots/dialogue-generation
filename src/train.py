@@ -407,6 +407,9 @@ def main():
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
+    d_model = model.config.d_model if 'xlnet' in \
+        args.model else model.config.n_embd
+
     if args.distributed:
         model = DistributedDataParallel(
             model, device_ids=[args.local_rank],
@@ -425,9 +428,6 @@ def main():
     test_dataset, num_test_steps = test
 
     patience, skip, loss, accuracy = 0, 1, 0, 0
-
-    d_model = model.config.d_model if 'xlnet' in \
-        args.model else model.config.n_embd
 
     set_lr_fn = partial(
         set_lr, 

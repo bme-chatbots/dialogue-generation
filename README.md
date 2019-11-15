@@ -111,7 +111,7 @@ The model can be trained then by simply running the `train` script with the defa
 
 --grad_ckpt # Use gradient checkpointing. ( default: False )
 
---name Name # of the current training session. ( default: %y.%m.%d-%H:%M:%S )
+--name # Name of the current training session. ( default: %y.%m.%d-%H:%M:%S )
 
 --model_dir # Path of the model root directory. ( default: `<PROJECT_DIR>`/model )
 ```
