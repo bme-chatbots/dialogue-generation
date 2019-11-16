@@ -60,7 +60,7 @@ def setup_interact_args():
         choices=['last', 'best'],
         help='Name of the checkpoint to load.')
     group.add_argument(
-        '--method',
+        '--decoding',
         type=str,
         default='topk',
         choices=list(METHODS),
@@ -202,9 +202,11 @@ def select_nucleus(args, logits, force_eos_id=None):
     sorted_indices_to_remove[..., 1:] = \
         sorted_indices_to_remove[..., :-1].clone()
     sorted_indices_to_remove[..., 0] = 0
-
     indices_to_remove = \
         sorted_indices[sorted_indices_to_remove]
+    
+    logits = logits.squeeze()
+
     logits[indices_to_remove] = float('-inf')
 
     return logits
@@ -273,7 +275,7 @@ def main():
 
     history = []
 
-    select_fn = METHODS[args.method]
+    select_fn = METHODS[args.decoding]
 
     special_ids = tokenizer.convert_tokens_to_ids([
         SP1, SP2, tokenizer.bos_token,

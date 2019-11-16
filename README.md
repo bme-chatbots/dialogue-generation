@@ -111,33 +111,76 @@ An example custom dataset class named `CustomDataset` is implemented in [`data.p
 
 ## Results
 
-These results are from `xlnet-base-cased` trained with default parameters for 14 epochs and **`--max_hist 1`**. More evaluation results are coming soon.
+The below dialogs are sampled from `gpt2` trained with default parameters for 6 epochs ( 63853 steps ) and `--max_hist 3`.
 
 ```text
-what is your name ?
-Susan Ann.
+User: hi
 
+Bot: hello, how are you doing?
 
-how old are you ?
-about three and a half, right?
+User: i am fine thanks
 
+Bot: are you a student? i'm.
 
-where do you live ?
-in California.
+User: are you really a student ?
 
+Bot: not a student, just like to walk around looking for strangers.
 
-what is your favourite colour ?
-I like red, both in both of them!
+User: that is creepy
 
+Bot: why is that? would you rather watch scary movies?
 
-do you have a favourite movie ?
-sure. It was quite popular among children.
+User: yes
 
+Bot: have you seen that show?
 
-what is the title of this movie ?
-it's called'Is it a new film '
+User: which show
 
+Bot: the notebook, it is a good television show. i can read comics in it.
 
-you are not funny
-I am not joking, but you deserve to change your mind.
+User: how old are you ?
+
+Bot: i am basically 22 and recently started drawing.
+
+User: do you draw by pencil?
+
+Bot: no, i don't. but i enjoy listening to audio books and reading by them.
+
+User: have you ever been to europe?
+
+Bot: i have been to europe. just got back from vacation in italy.
+```
+
+```text
+User: hi
+
+Bot: hey, i work as a nurse in the er
+
+User: do you like it?
+
+Bot: it pays the bills! how about you?
+
+User: i am a software developer
+
+Bot: awesome, i'm the proud owner of two black laptops
+
+User: oh realy? do you use them often ?
+
+Bot: i am guessing you have at least 50...
+
+User: no, i only have a single laptop
+
+Bot: oh, well i think its time for me to get out and exercise more.
+
+User: do you do any sports?
+
+Bot: not really, how about you?
+
+User: i go to the gym every day
+
+Bot: that is nice, i should work out.
+
+User: why don't you ?
+
+Bot: i like hanging out, but the gym doesn't give me enough exercise.
 ```
