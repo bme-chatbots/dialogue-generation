@@ -27,7 +27,7 @@ if PROJECT_PATH not in sys.path:
 
 from src.data import (
     setup_data_args,
-    create_dataset,
+    create_tokenizer,
     transform_dialog,
     RSP, SP1, SP2, HST)
 
@@ -37,14 +37,14 @@ from src.model import (
 
 from src.train import set_random_seed
 
-from src.collate import PREPARE
+from src.collate import PREPARE, COLLATE
 
 from torch.nn.functional import softmax
 
 
 def setup_interact_args():
     """
-    Sets up the arguments for evaluation.
+    Sets up the arguments for interaction.
     """
     parser = argparse.ArgumentParser()
     group = parser.add_argument_group('interact')
@@ -62,7 +62,7 @@ def setup_interact_args():
     group.add_argument(
         '--method',
         type=str,
-        default='nucleus',
+        default='topk',
         choices=list(METHODS),
         help='Decoding method to use.')
     group.add_argument(
@@ -80,6 +80,11 @@ def setup_interact_args():
         type=int,
         default=100,
         help='Top-k parameter for topk sampling.')
+    group.add_argument(
+        '--min_len',
+        type=int,
+        default=0,
+        help='Minimum length of the response sentence.')
     group.add_argument(
         '--seed',
         type=int,
@@ -99,31 +104,37 @@ def decode(args, model, inputs, tokenizer,
     """
     input_ids, token_type_ids = inputs
 
+    batch_size = len(input_ids)
+
     if 'xlnet' in args.model:
         mask_id = tokenizer.convert_tokens_to_ids(
             tokenizer.mask_token)
 
     rsp_id, eos_id = \
         tokenizer.convert_tokens_to_ids([
-            RSP,
-            tokenizer.eos_token
+            RSP, tokenizer.eos_token
         ])
 
-    preds = []
+    preds = [[] for _ in range(batch_size)]
+    finished = set()
 
-    for _ in range(args.max_len):
-        curr_input_ids = input_ids + preds
-
-        curr_token_type_ids = token_type_ids + \
-            [rsp_id] * len(preds)
+    for idx in range(args.max_len):
+        curr_input_ids = [
+            i + p for i, p in 
+            zip(input_ids, preds)]            
+        
+        curr_token_type_ids = [
+            t + [rsp_id] * len(p) for t, p in
+            zip(token_type_ids, preds)]
 
         if 'xlnet' in args.model:
-            curr_input_ids.append(mask_id)
-            curr_token_type_ids.append(rsp_id)
+            for i in range(batch_size):
+                curr_input_ids[i].append(mask_id)
+                curr_token_type_ids[i].append(rsp_id)
 
         inputs = PREPARE[args.model](
-            input_ids=[curr_input_ids],
-            token_type_ids=[curr_token_type_ids])
+            input_ids=curr_input_ids,
+            token_type_ids=curr_token_type_ids)
 
         # the first value of the output tuple from
         # the model is the next token logits tensor
@@ -131,37 +142,54 @@ def decode(args, model, inputs, tokenizer,
 
         # TODO find a better solution
         if 'gpt2' in args.model:
-            logits = logits[0][-1]
+            logits = logits[:, -1]
 
-        logits = logits.squeeze()
-        logits = select_fn(args, logits)
+        logits = logits.view(-1, logits.size(-1))
+
+        force_eos_id = None if idx >= args.min_len \
+            else eos_id
+            
+        logits = select_fn(args, logits, force_eos_id)
+
         probs = softmax(logits, dim=-1)
         pred = torch.multinomial(probs, 1)
+        pred = pred.view(-1)
 
         # breaking after eos_id is seen
-        if pred == eos_id:
-            break
+        for i, p in enumerate(pred.tolist()):
+            if p == eos_id:
+                finished.add(i)
+            elif i not in finished:
+                preds[i].append(p)
 
-        preds.append(pred.item())
+        if len(finished) == batch_size:
+            break
 
     return preds
 
 
-def select_topk(args, logits):
+def select_topk(args, logits, force_eos_id=None):
     """
     Applies topk sampling decoding.
-    """
+    """        
+    if force_eos_id is not None:
+        logits[:, force_eos_id] = float('-inf')
+
     indices_to_remove = logits < \
-        torch.topk(logits, args.top_k)[0][..., -1, None]
+        torch.topk(logits, args.top_k, axis=-1)[0][
+            ..., -1, None]
     logits[indices_to_remove] = float('-inf')
 
     return logits
 
 
-def select_nucleus(args, logits):
+def select_nucleus(args, logits, force_eos_id=None):
     """
     Applies nucleus decoding.
     """
+    if force_eos_id is not None:
+        logits[:, force_eos_id] = float('-inf')
+
     sorted_logits, sorted_indices = torch.sort(
         logits, descending=True)
 
@@ -183,14 +211,16 @@ def select_nucleus(args, logits):
 
 
 METHODS = {
-    'nucleus': select_topk,
-    'topk': select_nucleus
+    'nucleus': select_nucleus,
+    'topk': select_topk
 }
 
 
 def main():
     args = setup_interact_args()
+
     args.distributed = False
+
     args.cuda = not args.no_cuda and \
         torch.cuda.is_available()
 
@@ -215,8 +245,7 @@ def main():
 
     del state_dict['optimizer']
 
-    _, tokenizer, _ = create_dataset(
-        args=args, master_process=True)
+    tokenizer = create_tokenizer(args)
 
     vocab_size = len(tokenizer)
 
@@ -229,14 +258,12 @@ def main():
     except RuntimeError as e:
         print(
             'The provided checkpoint has mismatching '
-            'weights in the parameter dict.'
-        )
+            'weights in the parameter dict.')
 
         print(
             'WARNING: If the model was trained with '
             '`--grad_ckpt` you also have to provide '
-            'this argument for this script.'
-        )
+            'this argument for this script.')
 
         sys.exit()
 
@@ -264,11 +291,14 @@ def main():
             history[-args.max_hist:],
             special_ids=special_ids,
             max_len=args.max_len)
+
+        input_ids, type_ids = inputs
+        inputs = [[input_ids], [type_ids]]
         
         preds = decode(
             args=args, model=model,
             inputs=inputs, tokenizer=tokenizer,
-            select_fn=select_fn, device=device)
+            select_fn=select_fn, device=device)[0]
 
         history.append(preds)
 
@@ -282,9 +312,9 @@ def main():
         try:
             print()
             text = input('User: ')
+            print()
             output = respond(text)
             print('Bot: {}'.format(output))
-            print()
 
         except KeyboardInterrupt:
             break

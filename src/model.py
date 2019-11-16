@@ -45,7 +45,7 @@ def setup_model_args(parser):
     group.add_argument(
         '-m', '--model',
         type=str,
-        default='xlnet-base-cased',
+        default='gpt2',
         choices=list(MODEL),
         help='Name of the model.')
     group.add_argument(

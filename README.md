@@ -66,72 +66,10 @@ The training loss and accuracy is logged with TensorboardX, which can also be tr
 %tensorboard --logdir "dialogue-generation/model"
 ```
 
-The model can be trained then by simply running the `train` script with the default flags.
+The model can be trained then by simply running the `train` script with the default flags. You can see all flags accepted by the `train.py` script by providing `-h` flag.
 
 ```bash
 !cd dialogue-generation; python -m src.train
-```
-
-**`training`** related arguments for the `train.py` script. Setting these arguments will effect only the current training session, and are not saved for resuming the training in the future ( only the model and optimizer state is saved ).
-
-```bash
---config # Path of the config file that contains flags. ( default: None )
-
---max_epochs # Maximum number of epochs for training. ( default: 25 )
-
---no_cuda # Do not use GPU for training. ( default: False )
-
---fp16 # Use half-precision training. ( default: False )
-
---lr # Learning rate for the optimizer. ( default: 1e-5 )
-
---batch_size # Batch size for training and validation. ( default: 64 )
-
---patience # Patience value for early stopping. ( default: 5 )
-
---schedule # Type of learning rate scheduling to use. ( default: noam )
-
---warmup_steps # Number of warmup steps. ( default: 0.1 )
-
---total_steps # Number of total optimization steps. ( default: 1000000 )
-
---grad_accum_steps # Number of steps for grad accum. ( default: 2 )
-
---notebook # Render progressbar in notebook mode. ( default: False )
-
---clip_grad # Value of gradient clipping. ( default: None )
-
---seed # Random seed for the training. ( default: None )
-```
-
-**`model`** related arguments for the `train.py` script. Note that `--grad_ckpt` is persistent setting so if a model is trained with this flag on, after reloading for further training or interaction this flag has to be passed again.
-
-```bash
---model # Name of model for training. ( default: xlnet-base-cased )
-
---grad_ckpt # Use gradient checkpointing. ( default: False )
-
---name # Name of the current training session. ( default: %y.%m.%d-%H:%M:%S )
-
---model_dir # Path of the model root directory. ( default: `<PROJECT_DIR>`/model )
-```
-
-**`data`** related arguments for the `train.py` script. Note that changing the `--file_size` or `--max_hist` will result in generating a new version of the serialized data. `--max_len` argument, however can be changed without further data generation as sentences are truncated during training on the fly.
-
-```bash
---data # Name of the dataset to use for training. ( default: dailydialog )
-
---data_dir # Path of the root data directory. ( default: `<PROJECT_DIR>`/data )
-
---download_dir # Path of download root directory. ( default: `<PROJECT_DIR>`/data )
-
---file_size # Max utterances stored in a single file. ( default: 100000 )
-
---max_hist # Num utterances in the history. ( default: 2 )
-
---force_rebuild # Recreate the data even if it exists. ( default: False )
-
---max_len # Maximum length of an utterance. ( default: 50 )
 ```
 
 After training the model can be downloaded by setting the download link in the following snippet to the one logged by the script after evaluation. ( `Saving model to dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt` )
@@ -147,26 +85,6 @@ FileLink(r'dialogue-generation/src/../model/gpt2/19.11.03-12:59:47/model.pt')
 ## Interaction
 
 An interactive evaluation mode is available on the trained model by running the `interact` script and providing the path of the trained model with `--model_file`. You can also provide the `--config` file or just simply give the same `--model` and `--name` argument, which was used during training.
-
-**`interact`** related arguments for the `interact.py` script.
-
-```bash
---model_file # Name of the model file; ( default: None )
-
---ckpt_name # If loading model by `--name` and not `--model_file` use the `last` or `best` version ( default: `last` )
-
---method # Decoding method for interaction ( default: nucleus )
-
---no_cuda # Do not use GPU for training. ( default: False )
-
---top_p # Top-p parameter for nucleus decoding. ( default: 0.9 )
-
---top_p # Top-k parameter for topk sampling. ( default: 100 )
-
---seed # Random seed for the training. ( default: None )
-```
-
-**`model`** and **`data`** arguments are also accepted ( e.g. setting `--max_hist` to different value during interaction will enable the model to accept longer context, even if it was trained with a lower history length ).
 
 ```console
 python -m src.interact --model gpt2-medium --name my_test_run
