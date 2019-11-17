@@ -55,6 +55,7 @@ def main():
     args = setup_eval_args()
 
     args.batch_size = 8
+    args.min_len = 2
 
     # evaluation mode only processes a single element
     args.distributed = False
@@ -119,7 +120,7 @@ def main():
         """
         Responds to the given text.
         """
-        inputs, targets = batch
+        inputs, _ = batch
 
         input_ids, type_ids = inputs
         inputs = (input_ids.tolist(), type_ids.tolist())
@@ -129,14 +130,10 @@ def main():
             inputs=inputs, tokenizer=tokenizer,
             select_fn=select_fn, device=device)
         
-        targets = [
-            tokenizer.decode(t, True) for t in targets]
-        
         preds = [
             tokenizer.decode(p, True) for p in preds]
 
-        # last token is the end token
-        return preds, targets
+        return preds
 
     train, _, test = [
         (split, ceil(
@@ -163,8 +160,8 @@ def main():
             leave=False,
             total=num_train_steps)
 
-        # processing the training data and building a
-        # vocabulary for the evaluation script
+        # # processing the training data and building a
+        # # vocabulary for the evaluation script
         for inputs, _ in loop:
             for input_ids in inputs[0].tolist():
                 text = tokenizer.decode(input_ids, True)
@@ -185,21 +182,25 @@ def main():
         for batch in loop:
             inputs = batch[0][0].tolist()
                 
-            preds, targets = predict(batch)
+            preds = predict(batch)
 
-            for inp, prd, trg in zip(inputs, preds, targets):
+            for inp, prd in zip(inputs, preds):
                 inp = tokenizer.decode(inp, True)
 
-                tts.write(inp + '\n')
-                r.write(prd + '\n')
-                ttt.write(trg + '\n')
+                # removing speaker tokens from the input
+                # and creating target sentence
+
+                split = inp.split('<sp1>')
+                inp, trg = split[:-1], split[-1]
+                inp = ' '.join(' '.join(inp).split('<sp2>'))
+                inp = inp.strip()
+
+                tts.write(inp.lower() + '\n')
+                r.write(prd.lower() + '\n')
+                ttt.write(trg.lower() + '\n')
 
                 for word in inp.split():
                     vocab.add(word)
-
-
-        tts.seek(0)
-        print(tts.read())
 
         tv.write('\n'.join(vocab))
 

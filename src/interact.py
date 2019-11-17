@@ -186,6 +186,7 @@ def select_topk(args, logits, force_no_eos_id=None):
     indices_to_remove = logits < \
         torch.topk(logits, args.top_k, axis=-1)[0][
             ..., -1, None]
+
     logits[indices_to_remove] = float('-inf')
 
     return logits
@@ -200,7 +201,7 @@ def select_nucleus(args, logits, force_no_eos_id=None):
         logits[:, force_no_eos_id] = float('-inf')
 
     sorted_logits, sorted_indices = torch.sort(
-        logits, descending=True)
+        logits, dim=-1, descending=True)
 
     cumulative_probs = torch.cumsum(
         softmax(sorted_logits, dim=-1), dim=-1)
@@ -211,12 +212,12 @@ def select_nucleus(args, logits, force_no_eos_id=None):
     sorted_indices_to_remove[..., 1:] = \
         sorted_indices_to_remove[..., :-1].clone()
     sorted_indices_to_remove[..., 0] = 0
-    indices_to_remove = \
-        sorted_indices[sorted_indices_to_remove]
-    
-    logits = logits.squeeze()
 
-    logits[indices_to_remove] = float('-inf')
+    for idx in range(logits.size(0)):
+        indices_to_remove = \
+            sorted_indices[idx, sorted_indices_to_remove[idx]]
+        
+        logits[idx, indices_to_remove] = float('-inf')
 
     return logits
 
