@@ -130,7 +130,7 @@ def setup_train_args():
         type=int,
         default=1000000,
         help='Number of optimization steps.')
-    group.add_argument(
+    parser.add_argument(
         '--grad_accum_steps',
         type=int,
         default=2,

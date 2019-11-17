@@ -111,7 +111,7 @@ An example custom dataset class named `CustomDataset` is implemented in [`data.p
 
 ## Results
 
-The below dialog is sampled from `gpt2` trained with default parameters for 6 epochs ( 63853 steps ) and `--max_hist 3` on `PersonChat` dataset.
+The below dialog is sampled from `gpt2` trained with default parameters for 6 epochs ( 63853 steps ) and `--max_hist 3` on `PersonaChat` dataset.
 
 ```text
 User: hi
