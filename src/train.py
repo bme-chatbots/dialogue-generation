@@ -307,12 +307,15 @@ def compute_loss(outputs, targets, ignore_idx):
     correct = (targets_view == preds) & not_ignore
     correct = correct.float().sum()
 
-    accuracy = correct / num_targets
+    acc = (correct / num_targets).item()
     loss = loss / num_targets
 
-    ppl = torch.exp(loss)
+    ppl = torch.exp(loss).item()
 
-    return loss, accuracy, ppl
+    if ppl == float('inf'):
+        ppl = 1e20
+
+    return loss, acc, ppl
 
 
 def main():
@@ -556,7 +559,7 @@ def main():
             # for more accurate logging
             acc = reduce_tensor(acc)
 
-        return loss, acc.item(), ppl.item()
+        return loss, acc, ppl
 
     def train_step(batch):
         """
@@ -648,9 +651,6 @@ def main():
                 loop.set_postfix(OrderedDict(
                     loss=loss.item(), ppl=ppl, acc=accuracy))
 
-                if ppl == float('inf'):
-                    ppl = 1e20
-
                 yield loss.item(), accuracy, ppl
 
     def save_state(name):
@@ -681,6 +681,7 @@ def main():
     if master_process:
         train_args = vars(args)
         logger.info(str(train_args))
+        
         print()
         print(tabulate(train_args.items(), tablefmt='presto'))
         print()
