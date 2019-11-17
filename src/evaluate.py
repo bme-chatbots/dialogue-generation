@@ -54,7 +54,7 @@ from src.interact import (
 def main():
     args = setup_eval_args()
 
-    args.batch_size = 8
+    args.batch_size = 1
     args.min_len = 2
 
     # evaluation mode only processes a single element
