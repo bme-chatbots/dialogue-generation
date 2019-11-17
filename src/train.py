@@ -546,7 +546,7 @@ def main():
         targets = torch.as_tensor(targets)
         targets = targets.long().to(device)
 
-        loss, accuracy, ppl = compute_loss(
+        loss, acc, ppl = compute_loss(
             outputs=outputs,
             targets=targets,
             ignore_idx=pad_idx)
@@ -554,9 +554,9 @@ def main():
         if args.distributed:
             # reducing accuracy accross devices
             # for more accurate logging
-            accuracy = reduce_tensor(accuracy)
+            acc = reduce_tensor(acc)
 
-        return loss, accuracy.item(), ppl.item()
+        return loss, acc.item(), ppl.item()
 
     def train_step(batch):
         """
@@ -564,7 +564,7 @@ def main():
         """
         nonlocal step, skip
 
-        loss, accuracy, ppl = forward_step(batch)
+        loss, acc, ppl = forward_step(batch)
 
         if torch.isnan(loss).item():
             # during distributed training NaN
@@ -600,7 +600,11 @@ def main():
 
         step += 1
 
-        return loss.item(), accuracy, ppl
+        return {
+            'loss': loss.item(), 
+            'acc': acc, 
+            'ppl': ppl
+        }
 
     def backward(loss):
         """
@@ -725,23 +729,19 @@ def main():
 
         for batch in loop:
             with skip_error():
-                loss, acc, ppl = train_step(batch)
+                results = train_step(batch)
 
+                loss = results['loss']
                 if master_process and loss is not None:
-                    train_metrics['loss'].append(loss)
-                    train_metrics['acc'].append(acc)
-                    train_metrics['ppl'].append(ppl)
-
-                    # logging to tensorboard
-                    writer.add_scalar(
-                        'train/loss', loss, step)
-                    writer.add_scalar(
-                        'train/acc', acc, step)
-                    writer.add_scalar(
-                        'train/ppl', ppl, step)
+                    # adding the results to history
+                    # and logging them to tensorboard
+                    for metric, value in results.items():
+                        train_metrics[metric].append(value)
+                        writer.add_scalar(
+                            'train/' + metric, value, step)
 
             loop.set_postfix(OrderedDict(
-                loss=loss, ppl=ppl, acc=acc, skip=skip))
+                **results, skip=skip))
 
         train_metrics = {
             metric: mean(values) if len(values) > 0 else 0.0
