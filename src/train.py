@@ -312,9 +312,6 @@ def compute_loss(outputs, targets, ignore_idx):
 
     ppl = torch.exp(loss).item()
 
-    if ppl == float('inf'):
-        ppl = 1e20
-
     return loss, acc, ppl
 
 
@@ -738,6 +735,10 @@ def main():
                     # and logging them to tensorboard
                     for metric, value in results.items():
                         train_metrics[metric].append(value)
+
+                        if value == float('inf'):
+                            value = 1e30
+
                         writer.add_scalar(
                             'train/' + metric, value, step)
 
@@ -782,6 +783,10 @@ def main():
                 'val/loss', valid_loss, step)
             writer.add_scalar(
                 'val/acc', valid_acc, step)
+
+            if valid_ppl == float('inf'):
+                valid_ppl = 1e30
+
             writer.add_scalar(
                 'val/ppl', valid_ppl, step)
 
