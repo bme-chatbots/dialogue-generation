@@ -20,7 +20,7 @@ python setup.py build_ext --inplace
 
 ## Training
 
-The model can be trained with the following commands. Note that `--data_dir` and `--model_dir` are optional, as they are provided by default but you can also customize the location of model and data directories with those arguments. The exact path of the model is `<model_dir>/<model>/<name>` where the name subdirectory is given by the `--name` argument ( `DD:MM:YY-hh-mm-ss` by default ) contains the logs and training checkpoints for a particular run, while `<model>` contains the pretrained initial checkpoint of the model. This is useful if one would like to train a model on several datasets in a consecutive manner, which can be done by mainting the same `--name` argument and changing the `--data` parameter.
+The following command will start training on a single GPU/CPU with `gpt2-medium` model on `PersonaChat`. `--name` is the name of the subdirectory in the model folder, where logs and checkpoints are saved.
 
 ```console
 python -m src.train --model gpt2-medium --data personachat --name my_test_run
@@ -38,11 +38,9 @@ You can also use predefined configs by passing the path of the config json file 
 python -m src.train --config src/configs/xlnet-dailydialog.json
 ```
 
-Available models are **`xlnet-base-cased`**, **`xlnet-large-cased`**, and **`distilgpt2`** **`gpt2`**, **`gpt2-medium`**, **`gpt2-large`**, **`gpt2-xl`**. Currently the available dataset options are **`dailydialog`**, **`personachat`**, **`topicalchat`** but you can easily extend them by adding your own. Example to create your own dataset can be seen below.
+Training the model is fast and easy on *[Google Colaboratory](https://colab.research.google.com/notebooks/welcome.ipynb)* or *[Kaggle kernel](https://www.kaggle.com/kernels)*. It is important to set the runtime type to GPU with the new Tesla P100 or Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older Tesla K80 version. You can check the current type by running `!nvidia-smi` in a cell of your colab.
 
-Training the model is fast and easy on *[Google Colaboratory](https://colab.research.google.com/notebooks/welcome.ipynb)* or *[Kaggle kernel](https://www.kaggle.com/kernels)*, which can be done from scratch by creating a new colab file in your Google Drive and running it with the following snippet. It is important to set the runtime type to GPU with the new Tesla P100 or Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older Tesla K80 version. You can check the current type by running `!nvidia-smi` in a cell of your colab.
-
-*As a shortcut here is a complete [`example gist`](), which you can simply import to your Google Drive as a colaboratory file.*
+*As a shortcut here is a complete [`example gist`](https://gist.github.com/Mrpatekful/94aa58038cdd221cfa83a7e7334f3835), which you can simply import to your Google Drive as a colaboratory file.*
 
 Copy and run the following code in a cell of your colab *( or Kaggle kernel )* file to install the model. If you use Kaggle kernel you also have to enable internet access.
 
@@ -148,4 +146,3 @@ User: why don't you ?
 
 Bot: i like hanging out, but the gym doesn't give me enough exercise.
 ```
-

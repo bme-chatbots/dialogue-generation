@@ -46,62 +46,8 @@ from src.collate import PREPARE
 from src.interact import (
     decode, 
     select_nucleus, 
-    select_topk)
-
-
-def setup_eval_args():
-    """
-    Sets up the arguments for evaluation.
-    """
-    parser = argparse.ArgumentParser()
-    group = parser.add_argument_group('evaluation')
-    group.add_argument(
-        '--model_file',
-        type=str,
-        default=None,
-        help='Path to the file of the model.')
-    group.add_argument(
-        '--ckpt_name',
-        type=str,
-        default='last',
-        choices=['last', 'best'],
-        help='Name of the checkpoint to load.')
-    group.add_argument(
-        '--method',
-        type=str,
-        default='nucleus',
-        choices=list(METHODS),
-        help='Decoding method to use.')
-    group.add_argument(
-        '--no_cuda',
-        action='store_true',
-        default=torch.cuda.is_available(),
-        help='Device for training.')
-    group.add_argument(
-        '--top_p',
-        type=float,
-        default=0.9,
-        help='Top-p parameter for nucleus sampling.')
-    group.add_argument(
-        '--top_k',
-        type=int,
-        default=100,
-        help='Top-k parameter for topk sampling.')
-    group.add_argument(
-        '--min_len',
-        type=int,
-        default=1,
-        help='Minimum length of the decoded sentence.')
-    group.add_argument(
-        '--seed',
-        type=int,
-        default=None,
-        help='Random seed for interactive mode.')
-
-    setup_data_args(parser)
-    setup_model_args(parser)
-
-    return parser.parse_args()
+    select_topk,
+    setuo_eval_args)
 
 
 METHODS = {
@@ -113,7 +59,7 @@ METHODS = {
 def main():
     args = setup_eval_args()
 
-    args.batch_size = 64
+    args.batch_size = 8
 
     # evaluation mode only processes a single element
     args.distributed = False

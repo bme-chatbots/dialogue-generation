@@ -42,50 +42,49 @@ from src.collate import PREPARE, COLLATE
 from torch.nn.functional import softmax
 
 
-def setup_interact_args():
+def setup_eval_args():
     """
     Sets up the arguments for interaction.
     """
     parser = argparse.ArgumentParser()
-    group = parser.add_argument_group('interact')
-    group.add_argument(
+    parser.add_argument(
         '--model_file',
         type=str,
         default=None,
         help='Path to the file of the model.')
-    group.add_argument(
+    parser.add_argument(
         '--ckpt_name',
         type=str,
         default='last',
         choices=['last', 'best'],
         help='Name of the checkpoint to load.')
-    group.add_argument(
+    parser.add_argument(
         '--decoding',
         type=str,
         default='topk',
         choices=list(METHODS),
         help='Decoding method to use.')
-    group.add_argument(
+    parser.add_argument(
         '--no_cuda',
         action='store_true',
         default=torch.cuda.is_available(),
         help='Device for training.')
-    group.add_argument(
+    parser.add_argument(
         '--top_p',
         type=float,
         default=0.9,
         help='Top-p parameter for nucleus sampling.')
-    group.add_argument(
+    parser.add_argument(
         '--top_k',
         type=int,
         default=100,
         help='Top-k parameter for topk sampling.')
-    group.add_argument(
+    parser.add_argument(
         '--min_len',
         type=int,
         default=0,
         help='Minimum length of the response sentence.')
-    group.add_argument(
+    parser.add_argument(
         '--seed',
         type=int,
         default=None,
@@ -119,14 +118,20 @@ def decode(args, model, inputs, tokenizer,
     finished = set()
 
     for idx in range(args.max_len):
+        # creating a batch of input ids extended with
+        # the input ids which were predicted by the model
         curr_input_ids = [
-            i + p for i, p in 
+            ids + pred for ids, pred in 
             zip(input_ids, preds)]            
         
         curr_token_type_ids = [
-            t + [rsp_id] * len(p) for t, p in
+            ids + [rsp_id] * len(pred) 
+            for ids, pred in
             zip(token_type_ids, preds)]
 
+        # xlnet also requires an extra token which will
+        # be predicted ( this can be any token as it
+        # will be masked )
         if 'xlnet' in args.model:
             for i in range(batch_size):
                 curr_input_ids[i].append(mask_id)
@@ -146,10 +151,12 @@ def decode(args, model, inputs, tokenizer,
 
         logits = logits.view(-1, logits.size(-1))
 
-        force_eos_id = None if idx >= args.min_len \
+        # forcing no eos id because the sequence is
+        # not min_len long yet
+        force_no_eos_id = None if idx >= args.min_len \
             else eos_id
             
-        logits = select_fn(args, logits, force_eos_id)
+        logits = select_fn(args, logits, force_no_eos_id)
 
         probs = softmax(logits, dim=-1)
         pred = torch.multinomial(probs, 1)
@@ -168,12 +175,13 @@ def decode(args, model, inputs, tokenizer,
     return preds
 
 
-def select_topk(args, logits, force_eos_id=None):
+# implementation is from Huggingface/transformers repo
+def select_topk(args, logits, force_no_eos_id=None):
     """
     Applies topk sampling decoding.
     """        
-    if force_eos_id is not None:
-        logits[:, force_eos_id] = float('-inf')
+    if force_no_eos_id is not None:
+        logits[:, force_no_eos_id] = float('-inf')
 
     indices_to_remove = logits < \
         torch.topk(logits, args.top_k, axis=-1)[0][
@@ -183,12 +191,13 @@ def select_topk(args, logits, force_eos_id=None):
     return logits
 
 
-def select_nucleus(args, logits, force_eos_id=None):
+# implementation is from Huggingface/transformers repo
+def select_nucleus(args, logits, force_no_eos_id=None):
     """
     Applies nucleus decoding.
     """
-    if force_eos_id is not None:
-        logits[:, force_eos_id] = float('-inf')
+    if force_no_eos_id is not None:
+        logits[:, force_no_eos_id] = float('-inf')
 
     sorted_logits, sorted_indices = torch.sort(
         logits, descending=True)
@@ -219,7 +228,7 @@ METHODS = {
 
 
 def main():
-    args = setup_interact_args()
+    args = setup_eval_args()
 
     args.distributed = False
 

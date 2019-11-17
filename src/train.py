@@ -80,53 +80,52 @@ def setup_train_args():
     Sets up the training arguments.
     """
     parser = argparse.ArgumentParser()
-    group = parser.add_argument_group('train')
-    group.add_argument(
+    parser.add_argument(
         '--config',
         type=str,
         default=None,
         help='Path of the config file.')
-    group.add_argument(
+    parser.add_argument(
         '--max_epochs',
         type=int,
         default=25,
         help='Maximum number of epochs for training.')
-    group.add_argument(
+    parser.add_argument(
         '--no_cuda',
         action='store_true',
         help='Device for training.')
     # TODO XLNet produces NaN with apex
-    group.add_argument(
+    parser.add_argument(
         '--fp16',
         action='store_true',
         help='Use fp16 precision training.')
-    group.add_argument(
+    parser.add_argument(
         '--lr',
         type=float,
         default=1e-5,
         help='Learning rate for the model.')
-    group.add_argument(
+    parser.add_argument(
         '--batch_size',
         type=int,
         default=64,
         help='Batch size during training.')
-    group.add_argument(
+    parser.add_argument(
         '--patience',
         type=int,
         default=5,
         help='Number of patience epochs before termination.')
-    group.add_argument(
+    parser.add_argument(
         '--schedule',
         type=str,
         default='noam',
         choices=['noam', 'noamwd'],
         help='Type of learning rate scheduling.')
-    group.add_argument(
+    parser.add_argument(
         '--warmup_steps',
         type=int,
         default=16000,
         help='Number of warmup steps.')
-    group.add_argument(
+    parser.add_argument(
         '--total_steps',
         type=int,
         default=1000000,
@@ -136,21 +135,21 @@ def setup_train_args():
         type=int,
         default=2,
         help='Number of steps for grad accum.')
-    group.add_argument(
+    parser.add_argument(
         '--local_rank',
         type=int,
         default=-1,
         help='Local rank for the script.')
-    group.add_argument(
+    parser.add_argument(
         '--notebook',
         action='store_true',
         help='Set true if you are using IPython notebook.')
-    group.add_argument(
+    parser.add_argument(
         '--clip_grad',
         type=float,
         default=None,
         help='Gradient clipping norm value.')
-    group.add_argument(
+    parser.add_argument(
         '--seed',
         type=int,
         default=None,
@@ -778,17 +777,15 @@ def main():
             record_history(results)
             print_results(results)
 
-            # logging to tensorboard
-            writer.add_scalar(
-                'val/loss', valid_loss, step)
-            writer.add_scalar(
-                'val/acc', valid_acc, step)
-
+            # converting ppl to a large number so tensorboard
+            # will not throw any warnings during training
             if valid_ppl == float('inf'):
                 valid_ppl = 1e30
 
-            writer.add_scalar(
-                'val/ppl', valid_ppl, step)
+            # logging to tensorboard
+            writer.add_scalar('val/loss', valid_loss, step)
+            writer.add_scalar('val/acc', valid_acc, step)
+            writer.add_scalar('val/ppl', valid_ppl, step)
 
         if master_process:
             save_state(name='last')
