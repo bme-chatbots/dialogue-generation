@@ -111,45 +111,7 @@ An example custom dataset class named `CustomDataset` is implemented in [`data.p
 
 ## Results
 
-The below dialogs are sampled from `gpt2` trained with default parameters for 6 epochs ( 63853 steps ) and `--max_hist 3`.
-
-```text
-User: hi
-
-Bot: hello, how are you doing?
-
-User: i am fine thanks
-
-Bot: are you a student? i'm.
-
-User: are you really a student ?
-
-Bot: not a student, just like to walk around looking for strangers.
-
-User: that is creepy
-
-Bot: why is that? would you rather watch scary movies?
-
-User: yes
-
-Bot: have you seen that show?
-
-User: which show
-
-Bot: the notebook, it is a good television show. i can read comics in it.
-
-User: how old are you ?
-
-Bot: i am basically 22 and recently started drawing.
-
-User: do you draw by pencil?
-
-Bot: no, i don't. but i enjoy listening to audio books and reading by them.
-
-User: have you ever been to europe?
-
-Bot: i have been to europe. just got back from vacation in italy.
-```
+The below dialog is sampled from `gpt2` trained with default parameters for 6 epochs ( 63853 steps ) and `--max_hist 3` on PersonChat dataset.
 
 ```text
 User: hi
@@ -184,3 +146,4 @@ User: why don't you ?
 
 Bot: i like hanging out, but the gym doesn't give me enough exercise.
 ```
+

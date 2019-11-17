@@ -42,7 +42,7 @@ except ImportError:
 
 from torch.nn.functional import (
     softmax, log_softmax,
-    nll_loss)
+    nll_loss, cross_entropy)
 
 from torch.distributed import (
     all_reduce, ReduceOp, barrier)
@@ -192,7 +192,7 @@ def load_state(
             model_path))
 
         return (
-            state_dict['valid_loss'],
+            state_dict['best_valid_loss'],
             state_dict['epoch'],
             state_dict['step']
         )
@@ -258,7 +258,7 @@ def noamwd_decay(
 
     return (
         d_model ** (-0.5) *  min(step ** (-0.5), 
-        step * warmup_steps**(-1.5)) *
+        step * warmup_steps ** (-1.5)) *
         rate ** (rate_exp))
 
 
@@ -310,7 +310,9 @@ def compute_loss(outputs, targets, ignore_idx):
     accuracy = correct / num_targets
     loss = loss / num_targets
 
-    return loss, accuracy
+    ppl = torch.exp(loss)
+
+    return loss, accuracy, ppl
 
 
 def main():
@@ -456,7 +458,10 @@ def main():
 
         # NOTE the hardcoded values to keep track of
         # in the history
-        headers = ['epoch', 'train_loss', 'valid_loss']
+        metrics = ['loss', 'acc', 'ppl']
+        headers = ['epoch'] + \
+            ['train_' + m for m in metrics] + \
+            ['valid_' + m for m in metrics]
 
         if exists(history_path):
             with open(history_path, 'r') as fh:
@@ -541,7 +546,7 @@ def main():
         targets = torch.as_tensor(targets)
         targets = targets.long().to(device)
 
-        loss, accuracy = compute_loss(
+        loss, accuracy, ppl = compute_loss(
             outputs=outputs,
             targets=targets,
             ignore_idx=pad_idx)
@@ -551,7 +556,7 @@ def main():
             # for more accurate logging
             accuracy = reduce_tensor(accuracy)
 
-        return loss, accuracy.item()
+        return loss, accuracy.item(), ppl.item()
 
     def train_step(batch):
         """
@@ -559,7 +564,7 @@ def main():
         """
         nonlocal step, skip
 
-        loss, accuracy = forward_step(batch)
+        loss, accuracy, ppl = forward_step(batch)
 
         if torch.isnan(loss).item():
             # during distributed training NaN
@@ -595,7 +600,7 @@ def main():
 
         step += 1
 
-        return loss.item(), accuracy
+        return loss.item(), accuracy, ppl
 
     def backward(loss):
         """
@@ -634,12 +639,15 @@ def main():
 
         for batch in loop:
             with skip_error():
-                loss, accuracy = forward_step(batch)
+                loss, accuracy, ppl = forward_step(batch)
 
                 loop.set_postfix(OrderedDict(
-                    loss=loss.item(), acc=accuracy))
+                    loss=loss.item(), ppl=ppl, acc=accuracy))
 
-                yield loss.item()
+                if ppl == float('inf'):
+                    ppl = 1e20
+
+                yield loss.item(), accuracy, ppl
 
     def save_state(name):
         """
@@ -650,7 +658,8 @@ def main():
         state = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'valid_loss': best_valid_loss,
+            'best_valid_loss': best_valid_loss,
+            'valid_loss': valid_loss,
             'epoch': epoch + 1,
             'step': step
         }
@@ -710,45 +719,58 @@ def main():
             num_train_steps, False,
             disable=not master_process)
 
-        train_loss = []
+        train_metrics = defaultdict(list)
 
         model.train()
 
         for batch in loop:
             with skip_error():
-                loss, accuracy = train_step(batch)
+                loss, acc, ppl = train_step(batch)
 
                 if master_process and loss is not None:
-                    train_loss.append(loss)
+                    train_metrics['loss'].append(loss)
+                    train_metrics['acc'].append(acc)
+                    train_metrics['ppl'].append(ppl)
 
                     # logging to tensorboard
                     writer.add_scalar(
                         'train/loss', loss, step)
                     writer.add_scalar(
-                        'train/acc', accuracy, step)
+                        'train/acc', acc, step)
+                    writer.add_scalar(
+                        'train/ppl', ppl, step)
 
             loop.set_postfix(OrderedDict(
-                loss=loss, acc=accuracy, skip=skip))
+                loss=loss, ppl=ppl, acc=acc, skip=skip))
 
-        if len(train_loss) > 0:
-            train_loss = mean(train_loss)
-        else:
-            train_loss = 0.0
+        train_metrics = {
+            metric: mean(values) if len(values) > 0 else 0.0
+            for metric, values in train_metrics.items()
+        }
 
         with torch.no_grad():
-            valid_loss = mean(evaluate(
+            valid_metrics = zip(*evaluate(
                 dataset=valid_dataset,
                 num_steps=num_valid_steps))
+
+        valid_loss, valid_acc, valid_ppl = [
+            mean(values) if len(values) > 0 else 0.0
+            for values in valid_metrics
+        ]
 
         # switching back to training
         model.train()
 
         if master_process:
-            results = {
-                'epoch': epoch,
-                'train_loss': train_loss,
-                'valid_loss': valid_loss
-            }
+            results = {'epoch': epoch}
+
+            results.update(train_metrics)
+
+            results.update({
+                'valid_loss': valid_loss,
+                'valid_acc': valid_acc,
+                'valid_ppl': valid_ppl
+            })
 
             record_history(results)
             print_results(results)
@@ -756,6 +778,10 @@ def main():
             # logging to tensorboard
             writer.add_scalar(
                 'val/loss', valid_loss, step)
+            writer.add_scalar(
+                'val/acc', valid_acc, step)
+            writer.add_scalar(
+                'val/ppl', valid_ppl, step)
 
         if master_process:
             save_state(name='last')
@@ -781,9 +807,14 @@ def main():
         writer.close()
 
     with torch.no_grad():
-        test_loss = mean(evaluate(
+        test_metrics = zip(*evaluate(
             dataset=test_dataset,
             num_steps=num_test_steps))
+
+    test_loss, test_acc, test_ppl = [
+        mean(values) if len(values) > 0 else 0.0
+        for values in test_metrics
+    ]
 
     if master_process:
         logger.info('test loss: {:.4}'.format(
