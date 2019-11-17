@@ -11,6 +11,7 @@
 # pylint: disable=no-name-in-module
 
 import sys
+import json
 import tempfile
 import argparse
 import torch
@@ -131,9 +132,23 @@ def main():
             select_fn=select_fn, device=device)
         
         preds = [
-            tokenizer.decode(p, True) for p in preds]
+            tokenizer.decode(p, True) 
+            for p in preds
+        ]
 
         return preds
+
+    def normalize_input(inputs):
+        """
+        Removes the special speaker tokens from
+        the input text.
+        """
+        split = inputs.split('<sp1>')
+        inputs, targets = split[:-1], split[-1]
+        inputs = ' '.join(' '.join(inputs).split('<sp2>'))
+        inputs = inputs.strip()
+
+        return inputs, targets
 
     train, _, test = [
         (split, ceil(
@@ -162,14 +177,15 @@ def main():
 
         # # processing the training data and building a
         # # vocabulary for the evaluation script
-        for inputs, _ in loop:
-            for input_ids in inputs[0].tolist():
-                text = tokenizer.decode(input_ids, True)
+        for batch in loop:
+            for inputs in batch[0][0].tolist():
+                inputs = tokenizer.decode(inputs, True)
+                inp, _ = normalize_input(inputs)
 
-                for word in text.split():
+                for word in inp.lower().split():
                     vocab.add(word)
 
-                tns.write(text + '\n')
+                tns.write(inp.lower() + '\n')
 
         loop = tqdm(
             test_dataset(), 
@@ -189,20 +205,25 @@ def main():
 
                 # removing speaker tokens from the input
                 # and creating target sentence
-
-                split = inp.split('<sp1>')
-                inp, trg = split[:-1], split[-1]
-                inp = ' '.join(' '.join(inp).split('<sp2>'))
-                inp = inp.strip()
-
+                inp, trg = normalize_input(inp)
+                
                 tts.write(inp.lower() + '\n')
                 r.write(prd.lower() + '\n')
                 ttt.write(trg.lower() + '\n')
 
-                for word in inp.split():
+                for word in inp.lower().split():
+                    vocab.add(word)
+
+                for word in trg.lower().split():
                     vocab.add(word)
 
         tv.write('\n'.join(vocab))
+
+        tns.flush()
+        tts.flush()
+        ttt.flush()
+        tv.flush()
+        r.flush()
 
         script_path = join(
             PROJECT_PATH, 'dialog-eval', 'code', 'main.py')
@@ -221,7 +242,34 @@ def main():
 
         outs, errs = process.communicate(
             'y'.encode(), timeout=120)
-            
+
+    output_path = join(
+        abspath(dirname(tns.name)), 'metrics.txt')
+
+    metric_path = join(model_dir, 'metric.json')
+    
+    with open('/tmp/metrics.txt', 'r') as fh:
+        metrics = fh.readline().split()[1:]
+        
+        # loading the output metrics organized into
+        # columns of mean, std and confidence
+        values = [
+            [m] + v.split(',') for m, v in 
+            zip(metrics, fh.readline().split()[1:])
+        ]
+
+    columns = list(zip(*values))
+
+    headers = ['metrics', 'mean', 'std', 'confidence']
+
+    with open(metric_path, 'w') as fh:
+        json.dump({
+            h: c for h, c in 
+            zip(headers, columns)
+        }, fh)
+
+    print(tabulate(values, headers=headers, floatfmt='.4f'))
+
 
 if __name__ == '__main__':
     main()

@@ -40,7 +40,7 @@ python -m src.train --config src/configs/xlnet-dailydialog.json
 
 Training the model is fast and easy on *[Google Colaboratory](https://colab.research.google.com/notebooks/welcome.ipynb)* or *[Kaggle kernel](https://www.kaggle.com/kernels)*. It is important to set the runtime type to GPU with the new Tesla P100 or Tesla T4 unit as it can fully leverage mixed-precision training and is much faster than the older Tesla K80 version. You can check the current type by running `!nvidia-smi` in a cell of your colab.
 
-*As a shortcut here is a complete [`example gist`](https://gist.github.com/Mrpatekful/94aa58038cdd221cfa83a7e7334f3835), which you can simply import to your Google Drive as a colaboratory file.*
+*As a shortcut here is a complete [example gist](https://gist.github.com/Mrpatekful/94aa58038cdd221cfa83a7e7334f3835), which you can simply import to your Google Drive as a colaboratory file.*
 
 Copy and run the following code in a cell of your colab *( or Kaggle kernel )* file to install the model. If you use Kaggle kernel you also have to enable internet access.
 
@@ -56,7 +56,7 @@ Copy and run the following code in a cell of your colab *( or Kaggle kernel )* f
 !cd dialogue-generation; pip install -r requirements.txt; python setup.py build_ext --inplace
 ```
 
-The training loss and accuracy is logged with TensorboardX, which can also be tracked in the colab file if the below code is run before the training cell.
+The training and validation metrics are logged to Tensorboard, which can also be tracked in the colab file if the below code is run before the training cell.
 
 ```bash
 %load_ext tensorboard
