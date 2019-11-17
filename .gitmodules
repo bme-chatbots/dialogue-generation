@@ -1,0 +1,3 @@
+[submodule "dialog-eval"]
+	path = dialog-eval
+	url = https://github.com/ricsinaruto/dialog-eval.git

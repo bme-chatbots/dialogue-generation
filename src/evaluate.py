@@ -263,8 +263,7 @@ def main():
         tv.write('\n'.join(vocab))
 
         script_path = join(
-            PROJECT_PATH, 'src', 'dialog-eval', 
-            'code', 'main.py')
+            PROJECT_PATH, 'dialog-eval', 'code', 'main.py')
 
         command = f'python {script_path} ' + \
             f'-tns={tns.name} -tts={tts.name} ' + \
