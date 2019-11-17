@@ -681,7 +681,7 @@ def main():
     if master_process:
         train_args = vars(args)
         logger.info(str(train_args))
-        
+
         print()
         print(tabulate(train_args.items(), tablefmt='presto'))
         print()
@@ -745,7 +745,8 @@ def main():
                 **results, skip=skip))
 
         train_metrics = {
-            metric: mean(values) if len(values) > 0 else 0.0
+            'train_' + metric: mean(values) 
+                if len(values) > 0 else 0.0
             for metric, values in train_metrics.items()
         }
 
