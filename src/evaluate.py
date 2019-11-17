@@ -47,7 +47,7 @@ from src.interact import (
     decode, 
     select_nucleus, 
     select_topk,
-    setuo_eval_args)
+    setup_eval_args)
 
 
 METHODS = {
