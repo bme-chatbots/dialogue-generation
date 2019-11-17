@@ -47,13 +47,8 @@ from src.interact import (
     decode, 
     select_nucleus, 
     select_topk,
-    setup_eval_args)
-
-
-METHODS = {
-    'nucleus': select_topk,
-    'topk': select_nucleus
-}
+    setup_eval_args,
+    METHODS)
 
 
 def main():
@@ -117,7 +112,7 @@ def main():
 
     history = []
 
-    select_fn = METHODS[args.method]
+    select_fn = METHODS[args.decoding]
 
     @torch.no_grad()
     def predict(batch):
