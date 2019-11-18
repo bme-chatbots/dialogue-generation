@@ -121,40 +121,60 @@ An example custom dataset class named `CustomDataset` is implemented in [`data.p
 
 ## Results
 
-The below dialog is sampled from `gpt2` trained with default parameters for 6 epochs ( 63853 steps ) and `--max_hist 3` on `PersonaChat` dataset.
+The below dialog is sampled from `gpt2` trained with default parameters for 7 epochs ( 149051 steps ) and `--max_hist 3` on `PersonaChat` dataset.
 
 ```text
 User: hi
 
-Bot: hey, i work as a nurse in the er
+Bot: greetings, i'm gerald.
 
-User: do you like it?
+User: how are you ?
 
-Bot: it pays the bills! how about you?
+Bot: good, thanks. getting ready for another hike, i love hiking!
 
-User: i am a software developer
+User: oh realy? where are you going?
 
-Bot: awesome, i'm the proud owner of two black laptops
+Bot: pikes peak. i am curently exploring famous mountains when i have time.
 
-User: oh realy? do you use them often ?
+User: that is cool are you going alone?
 
-Bot: i am guessing you have at least 50...
+Bot: my brother is in the us, we go hiking with him every month.
 
-User: no, i only have a single laptop
+User: how old are you by the way?
 
-Bot: oh, well i think its time for me to get out and exercise more.
+Bot: a little under 46 years old
 
-User: do you do any sports?
+User: are you in a relationship?
 
-Bot: not really, how about you?
+Bot: yes i am married, 3 boys, i am pregnant again. i am too busy to focus
+```
 
-User: i go to the gym every day
+![gpt2-personachat](https://i.imgur.com/B4ukDkC.png)
 
-Bot: that is nice, i should work out.
+----
 
-User: why don't you ?
+The below dialog is sampled from `gpt2` trained with default parameters for 8 epochs ( 48824 steps ) and `--max_hist 3` on `DailyDialog` dataset.
 
-Bot: i like hanging out, but the gym doesn't give me enough exercise.
+```text
+User: hi how are you ?
+
+Bot: fine. i got a promotion at work earlier this week.
+
+User: where do you work ?
+
+Bot: I work at the polling place.
+
+User: where is that ?
+
+Bot: I live in the dorms across the street.
+
+User: do you like it ?
+
+Bot: it's great. I heard it is far from here.
+
+User: are you a student ?
+
+Bot: yes. I am a student too.
 ```
 
 ![gpt2-dailydialog](https://i.imgur.com/LmhHdW1.png)
