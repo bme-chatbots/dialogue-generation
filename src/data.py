@@ -59,7 +59,7 @@ def setup_data_args(parser):
     group.add_argument(
         '-d', '--data',
         type=str,
-        default='dailydialog',
+        default='personachat',
         choices=list(DialogDataset.subclasses()),
         help='Name of the dataset to use.')
     group.add_argument(
@@ -979,8 +979,10 @@ class CustomDataset(DialogDataset):
         # this method would normally download the
         # dataset but it is assumed that custom data
         # is already present
+        data_dir = join(args.data_dir, cls.name)
+
         return [
-            (join(args.data_dir, split) + '.txt', split)
+            (join(data_dir, split) + '.txt', split)
             for split in ['train', 'valid', 'test']
         ]
 
@@ -991,7 +993,7 @@ class CustomDataset(DialogDataset):
         """
         with open(data_path, 'r') as fh:
             for line in fh:
-                yield fh.strip()
+                yield line.strip()
 
     @classmethod
     def generate_splits(cls, extracted_files):
@@ -1002,8 +1004,10 @@ class CustomDataset(DialogDataset):
             """
             Generates data from text data.
             """
+            split_read = cls.read_file(split)
+
             dialog = []
-            for utterance in split:
+            for utterance in split_read:
                 if utterance == '':
                     yield dialog
                     dialog = []

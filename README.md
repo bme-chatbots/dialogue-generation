@@ -98,6 +98,16 @@ python -m src.interact --config src/configs/xlnet-dailydialog.json
 
 To train any model on your own dataset you simply have to subclass from `DialogDataset` and implement data generation from the raw files. Given a `train.txt`, `valid.txt` and `test.txt` placed in `data\<name of your data>`, where each turn in a dialog is in a new line and separate dialogs are divided by an extra empty line.
 
+```yaml
+├── data
+|   ├── dailydialog
+|   └── custom_dataset   # name of your data ( custom_dataset by default )
+|       ├── train.txt    # the correctly formated train, valid and test files
+|       ├── valid.txt
+|       └── test.txt
+├── src
+```
+
 ```text
 Hello how are you?
 Hi I'm fine thanks. And you?
@@ -146,3 +156,5 @@ User: why don't you ?
 
 Bot: i like hanging out, but the gym doesn't give me enough exercise.
 ```
+
+![gpt2-dailydialog](https://i.imgur.com/LmhHdW1.png)
