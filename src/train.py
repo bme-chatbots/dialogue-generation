@@ -741,8 +741,8 @@ def main():
                         writer.add_scalar(
                             'train/' + metric, value, step)
 
-            loop.set_postfix(OrderedDict(
-                **results, skip=skip))
+                loop.set_postfix(OrderedDict(
+                    **results, skip=skip))
 
         train_metrics = {
             'train_' + metric: mean(values) 
