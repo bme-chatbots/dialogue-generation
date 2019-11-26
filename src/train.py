@@ -306,7 +306,7 @@ def compute_loss(outputs, targets, ignore_idx):
     correct = (targets_view == preds) & not_ignore
     correct = correct.float().sum()
 
-    acc = (correct / num_targets).item()
+    acc = correct / num_targets
     loss = loss / num_targets
 
     ppl = torch.exp(loss).item()
@@ -555,7 +555,7 @@ def main():
             # for more accurate logging
             acc = reduce_tensor(acc)
 
-        return loss, acc, ppl
+        return loss, acc.item(), ppl
 
     def train_step(batch):
         """
