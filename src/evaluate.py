@@ -248,7 +248,7 @@ def main():
 
     metric_path = join(model_dir, 'metric.json')
     
-    with open('/tmp/metrics.txt', 'r') as fh:
+    with open(output_path, 'r') as fh:
         metrics = fh.readline().split()[1:]
         
         # loading the output metrics organized into
