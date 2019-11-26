@@ -228,10 +228,10 @@ def main():
         script_path = join(
             PROJECT_PATH, 'dialog-eval', 'code', 'main.py')
 
-        command = f'python {script_path} ' + \
-            f'-tns={tns.name} -tts={tts.name} ' + \
-            f'-ttt={ttt.name} -r={r.name} ' + \
-            f'-tv={tv.name}'
+        command = 'python {} '.format(script_path) + \
+            '-tns={} -tts={} '.format(tns.name, tts.name) + \
+            '-ttt={} -r={} '.format(ttt.name, r.name) + \
+            '-tv={}'.format(tv.name)
 
         print('Running evaluation script ...')
 
