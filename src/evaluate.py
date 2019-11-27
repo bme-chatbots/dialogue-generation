@@ -16,6 +16,7 @@ import tempfile
 import argparse
 import torch
 import subprocess
+import contextlib
 
 from tqdm import tqdm
 from tabulate import tabulate
@@ -161,11 +162,21 @@ def main():
 
     vocab = set()
 
-    with tempfile.NamedTemporaryFile('w') as tns, \
-            tempfile.NamedTemporaryFile('w') as tts, \
-            tempfile.NamedTemporaryFile('w') as ttt, \
-            tempfile.NamedTemporaryFile('w') as r, \
-            tempfile.NamedTemporaryFile('w') as tv:
+    @contextlib.contextmanager
+    def make_temp():
+        """
+        Convenience function to create a tempfile.
+        """
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode='w', dir=model_dir) as fh:
+                yield fh
+        finally:
+            pass
+
+    with make_temp() as tns, make_temp() as tts, \
+            make_temp() as ttt, make_temp() as r, \
+            make_temp() as tv:
         # opening the resulting files as temporaries
         # saving training examples and predictions
 
