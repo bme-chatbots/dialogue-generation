@@ -252,7 +252,7 @@ def main():
             stdout=subprocess.PIPE)
 
         outs, errs = process.communicate(
-            'y'.encode(), timeout=120)
+            'y'.encode(), timeout=300)
 
     output_path = join(
         abspath(dirname(tns.name)), 'metrics.txt')

@@ -46,8 +46,6 @@ from os.path import (
 
 SP1 = '<sp1>'
 SP2 = '<sp2>'
-HST = '<hst>'
-RSP = '<rsp>'
 PAD = '<pad>'
 
 
@@ -133,7 +131,19 @@ def save_examples(
     Creates numericalizes examples from a raw data
     file and serializes them.
     """
- 
+
+    def generate_examples(dialogs):
+        """
+        Generates id examples from dialogs.
+        """
+        for example in dialogs:
+            if example is None:
+                # reaching the last segment of the last
+                # file so we can break from the loop
+                break
+    
+            yield example 
+
     # during data preprocessing the history
     # and target utterances are saved only once
     dialogs = generate_dialogs(
@@ -147,127 +157,46 @@ def save_examples(
 
     num_examples = 0
     filenames = []
+
     for idx, group in enumerate(groups):
         filename = '{}.{}.pt'.format(name, idx)
         filename = join(data_dir, filename)
 
         filenames.append(filename)
 
-        examples, indices = zip(
-            *list(generate_examples(dialogs=group)))
+        examples = list(generate_examples(group))
 
-        indices = list(chain(*indices))
-
-        dataset = {
-            'examples': examples,
-            'indices': indices
-        }
-
-        torch.save(dataset, filename)
-        num_examples += len(indices)
+        torch.save(group, filename)
+        num_examples += len(examples)
 
     return filenames, num_examples
-
-
-def generate_examples(dialogs):
-    """
-    Generates id examples from dialogs.
-    """
-    for example in dialogs:
-        if example is None:
-            # reaching the last segment of the last
-            # file so we can break from the loop
-            break
-
-        dialog, indices = example
-
-        yield dialog, indices
 
 
 def generate_dialogs(args, content, tokenizer):
     """
     Generates dialogs from the raw dailydialog file.
     """
-    def generate_indices(dialog_idx, encoded_dialog):
-        dialog_indices = list(range(len(encoded_dialog)))
-
-        # starting from index 1 because there is always
-        # at least 2 utterances in a dialog
-        for end_idx in range(1, len(encoded_dialog)):
-            hist_indices = dialog_indices[:end_idx]
-            hist_indices = hist_indices[-args.max_hist:]
-
-            target_utr = encoded_dialog[end_idx]
-
-            for begin_idx in hist_indices:
-                # adding 1 to length because role_id will
-                # be appended to every utterance in the
-                # `transform_dialog` function
-                example_len = \
-                    sum(len(encoded_dialog[i]) + 1
-                        for i in hist_indices)
-
-                # `len(target_utr) + 1` because
-                # `eos_id` is not added yet and therefore
-                # it is not included in target length
-                target_len = len(target_utr) + 1
-                example_len += target_len
-
-                yield (dialog_idx, begin_idx,
-                       end_idx, example_len)
-
-    for idx, dialog in tqdm(
-            enumerate(content), 
+    for dialog in tqdm(
+            content, 
             desc='transforming dataset',
             leave=False):
-        dialog = [tokenizer.encode(u) for u in dialog]
-
-        # generating indices list that indexes into
-        # the dialog and slices a history and a target
-        # this way the text data only has to be stored once
-        indices = list(generate_indices(
-            dialog_idx=idx, encoded_dialog=dialog))
-
-        yield dialog, indices
+        yield [tokenizer.encode(u) for u in dialog]
 
 
-def transform_dialog(history, special_ids, max_len):
+def transform_dialog(dialog, special_ids, max_len):
     """
     Transforms a dialog and creates `input_ids`
     and `token_type_ids` lists.
     """
-    sp1_id, sp2_id, sos_id, _, hst_id, rsp_id = \
-        special_ids
+    sp1_id, sp2_id, eos_id = special_ids
 
     input_ids, token_type_ids = [], []
-    # iterating on reversed history because the last
-    # utterance is always from speaker2 thus it is
-    # easier to assign the speaker id
-    for idx, utr in enumerate(history[::-1]):
+
+    for idx, utr in enumerate(dialog[:-1]):
         role_id = sp2_id if idx % 2 == 0 else sp1_id
 
-        ids = [role_id] + utr
-        # truncating each sequence to max len
-        ids = ids[:max_len]
-        input_ids.append(ids)
-
-        type_id = hst_id
-        token_type_ids.append([type_id] * len(ids))
-
-    # adding the history conversations
-    # reversing the order back to original
-    input_ids = \
-        list(chain(*input_ids[::-1]))
-    token_type_ids = \
-        list(chain(*token_type_ids[::-1]))
-
-    # adding the initial start token
-    input_ids.insert(0, sos_id)
-    token_type_ids.insert(0, type_id)
-
-    # adding the initial token of the response
-    input_ids.append(sp1_id)
-    token_type_ids.append(rsp_id)
+        input_ids.extend(utr + [eos_id])
+        token_type_ids.extend([role_id] * (len(utr) + 1))
 
     return input_ids, token_type_ids
 
@@ -285,10 +214,7 @@ class FileDataset(Dataset):
         filename = self.filenames[idx]
         dataset = torch.load(filename)
 
-        indices = dataset['indices']
-        examples = dataset['examples']
-
-        return examples, indices
+        return dataset 
 
     def __len__(self):
         return len(self.filenames)
@@ -331,8 +257,7 @@ def create_loader(
     dataset.
     """
     special_ids = tokenizer.convert_tokens_to_ids([
-        SP1, SP2, tokenizer.bos_token,
-        tokenizer.eos_token, HST, RSP
+        SP1, SP2, tokenizer.eos_token
     ])
 
     # distributed training is used if the local
@@ -352,13 +277,12 @@ def create_loader(
         """
         files = generate_files(filenames)
 
-        for dialogs, indices in files:
+        for dialogs in files:
             sampler = bucket_sampler_cls(
-                indices, shuffle=shuffle)
+                dialogs, shuffle=shuffle)
 
             dialog_dataset = dataset_cls(
                 dialogs=dialogs,
-                indices=indices,
                 max_len=args.max_len,
                 special_ids=special_ids)
 
@@ -411,7 +335,7 @@ def create_tokenizer(args):
 
         # adding special tokens
         # TODO check compatibility with all tokenizers
-        special_tokens = [SP1, SP2, HST, RSP]
+        special_tokens = [SP1, SP2]
         tokenizer.add_special_tokens({
             'additional_special_tokens': special_tokens})
 
@@ -455,8 +379,10 @@ def create_dataset(args, master_process):
         files = dataset_cls.download(args=args)
 
         train, valid, test = dataset_cls.transform(
-            args=args, files=files, 
-            tokenizer=tokenizer, data_dir=data_dir)
+            args=args, 
+            files=files, 
+            tokenizer=tokenizer, 
+            data_dir=data_dir)
 
         train_files, train_size = train
         valid_files, valid_size = valid
@@ -468,9 +394,9 @@ def create_dataset(args, master_process):
         with open(metadata_path, 'w') as fh:
             try:
                 json.dump({
-                    'train': [train_files, train_size],
-                    'valid': [valid_files, valid_size],
-                    'test': [test_files, test_size],
+                    'train': train,
+                    'valid': valid,
+                    'test': test,
                     'max_hist': args.max_hist,
                 }, fh)
             except KeyboardInterrupt:
@@ -532,7 +458,7 @@ def create_sampler_cls(sampler_cls):
             # is the size of the example
             self.sorted = sorted(
                 list(super().__iter__()),
-                key=lambda i: data_source[i][-1])
+                key=lambda i: len(data_source[i][0]))
 
         def __iter__(self):
             # divides the data into bucket size segments
@@ -721,48 +647,20 @@ class DialogDataset(Dataset):
         return {s.name: s for s in subclasses}
 
     def __init__(
-            self, dialogs, indices, 
-            special_ids, max_len):
+            self, dialogs, special_ids, max_len):
         self.dialogs = dialogs
-        self.indices = indices
         self.max_len = max_len
         self.special_ids = special_ids
 
     def __getitem__(self, idx):
-        dialog_idx, begin_idx, end_idx, input_len = \
-            self.indices[idx]
         dialog = self.dialogs[dialog_idx]
-
-        # the whole dialog is fetched and the
-        # `idx` element of indices array creates
-        # the example
-        eos_id = self.special_ids[3]
-        rsp_id = self.special_ids[5]
-
-        history = dialog[begin_idx:end_idx]
-        
-        # truncating the target to max_len
-        # each input sequence will be tuncated
-        # in `transform_dialog` function
-        target = dialog[end_idx][:self.max_len]
-        target += [eos_id]
 
         inputs = transform_dialog(
             history=history,
             special_ids=self.special_ids,
             max_len=self.max_len)
 
-        input_ids, token_type_ids = inputs
-
-        input_ids.extend(target)
-        token_type_ids.extend([rsp_id] * len(target))
-
-        # returning nested lists for convenient
-        # parameter passing to collate_fn
-        return [
-            input_ids, token_type_ids, 
-            target, [input_len]
-        ]
+        return list(inputs)
 
     def __len__(self):
         return len(self.indices)
