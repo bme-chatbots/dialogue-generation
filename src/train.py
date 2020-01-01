@@ -1,38 +1,27 @@
 """
 @author:    Patrik Purgai
-@copyright: Copyright 2019, dialogue-generation
+@copyright: Copyright 2019, gpt2-chatbot
 @license:   MIT
 @email:     purgai.patrik@gmail.com
-@date:      2019.07.12.
+@date:      2019.09.30.
 """
 
-# pylint: disable=import-error
-# pylint: disable=no-name-in-module
 # pylint: disable=no-member
-# pylint: disable=not-callable
-# pylint: disable=used-before-assignment
-    
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
+import re
 import sys
-import json
-import torch
-import random
-import argparse
-import logging
 import os
+import argparse
+import random
+import torch
+import json
 
 import numpy as np
-
-from contextlib import contextmanager
-from tabulate import tabulate
-from tensorboardX import SummaryWriter
-
-from collections import (
-    OrderedDict, defaultdict)
-
-from math import ceil
-from datetime import datetime
-from statistics import mean
-from functools import partial
 
 try:
     from apex import amp
@@ -40,19 +29,36 @@ try:
 except ImportError:
     APEX_INSTALLED = False
 
-from torch.nn.functional import (
-    softmax, log_softmax,
-    nll_loss, cross_entropy)
+from itertools import product
+from tabulate import tabulate
+from functools import partial
+from datetime import datetime
+from collections import defaultdict
+from tqdm import tqdm
+
+from ignite.contrib.handlers import (
+    ProgressBar)
+
+from ignite.handlers import (
+    ModelCheckpoint, EarlyStopping)
+
+from ignite.metrics import RunningAverage
+
+from ignite._utils import _to_hours_mins_secs
 
 from torch.distributed import (
-    all_reduce, ReduceOp, barrier)
+    all_reduce, ReduceOp)
 
-from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.utils import clip_grad_norm_
+
+from torch.nn.functional import (
+    nll_loss, log_softmax,
+    linear)
+
 from torch.nn.parallel import (
     DistributedDataParallel)
 
-from transformers import AdamW
+from torch.optim import AdamW
 
 from os.path import (
     exists, join,
@@ -60,31 +66,44 @@ from os.path import (
 
 # HACK to enable launching with
 # python src/train.py
-PROJECT_PATH = join(abspath(dirname(__file__)), '..')
-if PROJECT_PATH not in sys.path:
-    sys.path.append(PROJECT_PATH)
+PROJECT_DIR = join(abspath(dirname(__file__)), '..')
+if PROJECT_DIR not in sys.path:
+    sys.path.append(PROJECT_DIR)
+
+from src.model import (
+    GPT2,
+    setup_model_args)
+
+from src.utils import (
+    SPECIAL_TOKENS,
+    set_random_seed,
+    get_last_checkpoint,
+    download_config,
+    load_config,
+    download_tokenizer,
+    load_tokenizer,
+    download_pretrained,
+    execute_with_master,
+    load_weights,
+    SafeEngine,
+    Events)
 
 from src.data import (
     create_dataset,
-    setup_data_args,
-    create_dummy_batch)
+    setup_data_args)
 
-from src.model import (
-    compute_size,
-    create_model,
-    setup_model_args)
 
-    
 def setup_train_args():
     """
     Sets up the training arguments.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--config',
+        '--model_dir',
         type=str,
-        default=None,
-        help='Path of the config file.')
+        default=join(PROJECT_DIR, 'model', 'test'),
+        # datetime.today().strftime('%y.%m.%d-%H:%M:%S'),
+        help='Maximum number of epochs for training.')
     parser.add_argument(
         '--max_epochs',
         type=int,
@@ -94,7 +113,6 @@ def setup_train_args():
         '--no_cuda',
         action='store_true',
         help='Device for training.')
-    # TODO XLNet produces NaN with apex
     parser.add_argument(
         '--fp16',
         action='store_true',
@@ -102,23 +120,13 @@ def setup_train_args():
     parser.add_argument(
         '--lr',
         type=float,
-        default=1e-5,
+        default=1e-4,
         help='Learning rate for the model.')
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=64,
-        help='Batch size during training.')
-    parser.add_argument(
-        '--patience',
-        type=int,
-        default=5,
-        help='Number of patience epochs before termination.')
     parser.add_argument(
         '--schedule',
         type=str,
         default='noam',
-        choices=['noam', 'noamwd'],
+        choices=['noam', 'noamwd', 'linear'],
         help='Type of learning rate scheduling.')
     parser.add_argument(
         '--warmup_steps',
@@ -131,95 +139,44 @@ def setup_train_args():
         default=1000000,
         help='Number of optimization steps.')
     parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=32,
+        help='Batch size during training.')
+    parser.add_argument(
+        '--patience',
+        type=int,
+        default=5,
+        help='Number of patience epochs before termination.')
+    parser.add_argument(
         '--grad_accum_steps',
         type=int,
         default=2,
         help='Number of steps for grad accum.')
     parser.add_argument(
-        '--local_rank',
-        type=int,
-        default=-1,
-        help='Local rank for the script.')
-    parser.add_argument(
-        '--notebook',
-        action='store_true',
-        help='Set true if you are using IPython notebook.')
-    parser.add_argument(
-        '--clip_grad',
+        '--clip_grad_norm',
         type=float,
         default=None,
-        help='Gradient clipping norm value.')
+        help='radient clipping value.')
     parser.add_argument(
         '--seed',
         type=int,
         default=None,
-        help='Random seed for training.')
+        help='Seed for reproducibility.')
+    parser.add_argument(
+        '--force_download',
+        action='store_true',
+        help='Download files even if they exist.')
+    parser.add_argument(
+        '--local_rank',
+        type=int,
+        default=-1,
+        help='Local rank for the script.')
 
     setup_data_args(parser)
     setup_model_args(parser)
 
     return parser.parse_args()
-
-
-def set_random_seed(args):
-    """
-    Sets the random seed for training.
-    """
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-
-    if args.cuda:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-
-def load_state(
-        model_dir, model, optimizer, logger, device):
-    """
-    Loads the model and optimizer state.
-    """
-    try:
-        model_path = join(model_dir, 'last.pt')
-        state_dict = torch.load(
-            model_path, map_location=device)
-
-        model.load_state_dict(state_dict['model'])
-        optimizer.load_state_dict(state_dict['optimizer'])
-
-        logger.info('Loading model from {}'.format(
-            model_path))
-
-        return (
-            state_dict['best_valid_loss'],
-            state_dict['epoch'],
-            state_dict['step']
-        )
-
-    except FileNotFoundError:
-        return np.inf, 0, 0
-
-
-def create_logger(model_dir):
-    """
-    Creates a logger that outputs information to a
-    file and the standard output as well.
-    """
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s')
-
-    # setting up logging to a file
-    log_path = join(model_dir, 'training.log')
-    file_handler = logging.FileHandler(
-        filename=log_path)
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
-
-    return logger
 
 
 def create_optimizer(args, parameters):
@@ -241,7 +198,7 @@ def noam_decay(step, warmup_steps, d_model):
     https://arxiv.org/pdf/1706.03762.pdf.
     """
     return (
-        d_model ** (-0.5) * min(step ** (-0.5), 
+        d_model ** (-0.5) * min(step ** (-0.5),
         step * warmup_steps**(-1.5)))
 
 
@@ -256,8 +213,8 @@ def noamwd_decay(
         // decay_steps
 
     return (
-        d_model ** (-0.5) *  min(step ** (-0.5), 
-        step * warmup_steps ** (-1.5)) *
+        d_model ** (-0.5) *  min(step ** (-0.5),
+        step * warmup_steps**(-1.5)) *
         rate ** (rate_exp))
 
 
@@ -276,23 +233,25 @@ def set_lr(step, optimizer, schedule, lr,
         lr_this_step = lr * 1e4 * noamwd_decay(
             step + 1, warmup_steps, d_model)
 
+    elif schedule == 'linear':
+        pass
+
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr_this_step
 
 
-def compute_loss(outputs, targets, ignore_idx):
+def compute_loss(logits, targets, ignore_idx):
     """
     Computes the loss and accuracy.
     """
-    logits = outputs[0]
+    targets = targets.reshape(-1)
 
-    logits_view = logits.view(-1, logits.size(-1))
-    targets_view = targets.view(-1)
+    logits_view = logits.reshape(-1, logits.size(-1))
 
     log_probs = log_softmax(logits_view, dim=-1)
 
     loss = nll_loss(
-        log_probs, targets_view,
+        log_probs, targets,
         ignore_index=ignore_idx,
         reduction='sum')
 
@@ -300,10 +259,10 @@ def compute_loss(outputs, targets, ignore_idx):
 
     # computing accuracy without including the
     # values at the ignore indices
-    not_ignore = targets_view.ne(ignore_idx)
+    not_ignore = targets.ne(ignore_idx)
     num_targets = not_ignore.long().sum().item()
 
-    correct = (targets_view == preds) & not_ignore
+    correct = (targets == preds) & not_ignore
     correct = correct.float().sum()
 
     acc = correct / num_targets
@@ -311,7 +270,7 @@ def compute_loss(outputs, targets, ignore_idx):
 
     ppl = torch.exp(loss).item()
 
-    return loss, acc, ppl
+    return {'loss': loss, 'acc': acc, 'ppl': ppl}
 
 
 def main():
@@ -320,45 +279,40 @@ def main():
     """
     args = setup_train_args()
 
-    if args.notebook:
-        from tqdm import tqdm_notebook as tqdm
-    else:
-        from tqdm import tqdm
+    def get_save_pattern(asset_name):
+        """
+        Returns the saving file pattern.
+        """
+        return r'{}_{}_\d+.pth'.format(
+            args.pretrained, asset_name)
 
-    # if config is provided, then load it
-    if args.config is not None:
-        with open(args.config, 'r') as fh:
-            config = json.load(fh)
-
-        for arg in config:
-            setattr(args, arg, config[arg])
+    def load_asset(asset_state_path, asset):
+        """
+        Loads the asset state from the path.
+        """
+        asset_state = torch.load(
+            asset_state_path, map_location=device)
+        asset.load_state_dict(asset_state)
 
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
 
     # setting random seed for reproducibility
-    if args.seed:
-        set_random_seed(args)
+    if args.seed: set_random_seed(args)
 
-    model_dir = join(
-        args.model_dir, args.model, args.name)
-
-    os.makedirs(model_dir, exist_ok=True)
-    logger = create_logger(model_dir=model_dir)
+    os.makedirs(args.model_dir, exist_ok=True)
 
     if args.fp16 and not APEX_INSTALLED:
-        logger.warn(
-            '--fp16 passed but apex is not installed.')
+        msg = '--fp16 passed but apex is not installed.'
+        logger.warning(msg)
 
-    args.fp16 = args.fp16 and APEX_INSTALLED \
-        and args.cuda
-
-    master_process = args.local_rank in [0, -1]
     args.distributed = args.local_rank != -1
+    args.fp16 = args.fp16 and args.cuda and \
+        APEX_INSTALLED
 
     if args.distributed:
-        # use distributed training if local rank is given
-        # and GPU training is requested
+        # use distributed training if local rank is 
+        # given and GPU training is requested
         torch.cuda.set_device(args.local_rank)
         device = torch.device('cuda', args.local_rank)
 
@@ -371,125 +325,280 @@ def main():
         device = torch.device(
             'cuda' if args.cuda else 'cpu')
 
-    # creating dataset and storing dataset splits
-    # as individual variables for convenience
+    # creating tokenizer and fetching vocab size
+    tokenizer, specials = load_tokenizer(args)
 
-    if args.distributed:
-        # creating the dataset and model only on
-        # a single process ( downloading )
-        if master_process:
-            _, tokenizer, _ = create_dataset(
-                args, master_process)
+    # tokenzier must be downloaded
+    if tokenizer is None:
+        with execute_with_master(args):
+            download_tokenizer(args)
 
-            vocab_size = len(tokenizer)
+        tokenizer, specials = load_tokenizer(args)
 
-            create_model(args, model_dir, vocab_size)
+    args.vocab_size = len(tokenizer.encoder)
 
-        # other threads are waiting for the data init
-        barrier()
+    # loading config and downloading it is not found
+    config = load_config(args)
 
-    datasets, tokenizer, max_len = create_dataset(
-        args=args, master_process=master_process)
+    if config is None:
+        with execute_with_master(args):
+            download_config(args)
 
-    pad_idx = tokenizer.convert_tokens_to_ids(
-        tokenizer.pad_token)
-    vocab_size = len(tokenizer)
+        config = load_config(args)
 
-    model = create_model(args, model_dir, vocab_size)
+    # loading model from checkpoint or from
+    # pretrained weights
+    model_ckpt_path = get_last_checkpoint(
+        model_dir=args.model_dir, 
+        pattern=get_save_pattern('model'))
+
+    if model_ckpt_path is not None:
+        config.vocab_size += len(SPECIAL_TOKENS)
+        model = GPT2(config)
+
+    else:
+        with execute_with_master(args):
+            # checking if pretrained weights exists
+            # otherwise they are downloaded
+            download_pretrained(args)
+
+        model_state = load_weights(args.pretrained)
+        model = GPT2(config)
+        model.load_state_dict(model_state, strict=False)
+        # if the training is resumed then the weights
+        # have to be loaded after amp initialization
+
+        model.expand_embeddings(len(SPECIAL_TOKENS))
+        config.vocab_size += len(SPECIAL_TOKENS)
+
     model = model.to(device)
+    params = model.parameters()
+    optimizer = create_optimizer(args, params)
 
-    # TODO fix xlnet nan with mixed precision
-    if 'xlnet' in args.model:
-        args.fp16 = False
+    optim_ckpt_path = get_last_checkpoint(
+        model_dir=args.model_dir, 
+        pattern=get_save_pattern('optim'))
 
-    optimizer = create_optimizer(
-        args=args, parameters=model.parameters())
-
-    if master_process:
-        writer = SummaryWriter(
-            logdir=model_dir, flush_secs=100)
-
-    # loading previous state of the training
-    best_valid_loss, init_epoch, step = load_state(
-        model_dir=model_dir, model=model,
-        optimizer=optimizer, logger=logger,
-        device=device)
-
+    # using apex if required and loading its state
     if args.fp16:
         model, optimizer = amp.initialize(
             model, optimizer, opt_level='O2')
 
-    d_model = model.config.d_model if 'xlnet' in \
-        args.model else model.config.n_embd
+        amp_ckpt_path = get_last_checkpoint(
+            model_dir=args.model_dir, 
+            pattern=get_save_pattern('amp'))
+
+        if amp_ckpt_path is not None:
+            load_asset(amp_ckpt_path, amp)
+
+    if model_ckpt_path is not None:
+        load_asset(model_ckpt_path, model)
+
+    if optim_ckpt_path is not None:
+        load_asset(optim_ckpt_path, optimizer)
 
     if args.distributed:
         model = DistributedDataParallel(
             model, device_ids=[args.local_rank],
             output_device=args.local_rank)
 
-    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    args.world_size = int(
+        os.environ.get('WORLD_SIZE', 1))
 
-    train, valid, test = [
-        (split, ceil(
-            size / args.batch_size / world_size))
-        for split, size in datasets]
+    # creating dataset split loaders
+    train_dataset, valid_dataset = create_dataset(
+        args, tokenizer, specials)
 
-    # computing the sizes of the dataset splits
-    train_dataset, num_train_steps = train
-    valid_dataset, num_valid_steps = valid
-    test_dataset, num_test_steps = test
-
-    patience, skip, loss, accuracy = 0, 1, 0, 0
-
-    set_lr_fn = partial(
-        set_lr, 
-        optimizer=optimizer, 
-        schedule=args.schedule, 
-        lr=args.lr, 
-        warmup_steps=args.warmup_steps,
-        d_model=d_model)
-
-    if master_process:
-        # loading history for training logs
-        history_path = join(model_dir, 'history.json')
-
-        history = defaultdict(list)
-
-        # NOTE the hardcoded values to keep track of
-        # in the history
-        metrics = ['loss', 'acc', 'ppl']
-        headers = ['epoch'] + \
-            ['train_' + m for m in metrics] + \
-            ['valid_' + m for m in metrics]
-
-        if exists(history_path):
-            with open(history_path, 'r') as fh:
-                history = json.load(fh)
-
-    def print_results(results):
+    def reduce_tensor(tensor):
         """
-        Prints the history to the standard output.
+        Averages a tensor across gpus.
         """
-        data = list(zip(*[history[h] for h in headers]))
+        reduced = tensor.clone()
+        all_reduce(reduced, op=ReduceOp.SUM)
+        reduced /= world_size
 
-        table = tabulate(
-            tabular_data=data,
-            headers=headers,
-            floatfmt='.3f')
+        return reduced
 
-        # computing the tabular table string and
-        # printing only the last element
-        print(table.split('\n')[-1])
+    def to_tensor(array):
+        """
+        Converts the provided tf array to torch
+        tensor.
+        """
+        return torch.from_numpy(
+            array.numpy()).to(device)
 
-        msg = ', '.join(
-            '{}: {}'.format(n, r) for
-            n, r in results.items())
+    def unpack_tensors(batch):
+        """
+        Creates `input_ids`, `attn_mask` and
+        `type_ids` from `inputs` tensor.
+        """
+        input_ids, attn_mask, type_ids = [
+            to_tensor(batch[name]) for name in
+            ['input_ids', 'attn_mask', 'type_ids']
+        ]
 
-        logger.info(msg)
+        input_ids, targets = \
+            input_ids[:, :-1].long(), \
+            input_ids[:, 1:].long()
+
+        attn_mask = attn_mask[:, :-1].bool()
+        type_ids = type_ids[:, :-1].long()
+
+        return (input_ids, attn_mask, type_ids), targets
+
+    def forward_step(batch):
+        """
+        Applies forward pass with the given batch.
+        """
+        inputs, targets = unpack_tensors(batch)
+
+        input_ids, attn_mask, type_ids = inputs
+
+        outputs = model(
+            input_ids=input_ids,
+            attn_mask=attn_mask,
+            type_ids=type_ids)
+
+        metrics = compute_loss(
+            outputs[0], targets, specials.PAD)
+
+        return metrics
+
+    def train_step(engine, batch):
+        """
+        Propagates the inputs forward and updates
+        the parameters.
+        """
+        model.train()
+
+        results = forward_step(batch)
+
+        loss = results['loss'] / args.grad_accum_steps
+
+        backward(loss)
+
+        if args.clip_grad_norm is not None:
+            clip_grad_norm(args.clip_grad_norm)
+
+        if engine.state.iteration % \
+                args.grad_accum_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+
+        results['loss'] = loss.item()
+
+        return results
+
+    def eval_step(engine, batch):
+        """
+        Propagates the inputs forward without
+        storing any gradients.
+        """
+        model.eval()
+
+        with torch.no_grad():
+            results = forward_step(batch)
+
+        results['loss'] = results['loss'].item()
+
+        return results
+
+    def backward(loss):
+        """
+        Backpropagates the loss in either mixed or
+        normal precision mode.
+        """
+        if args.fp16:
+            with amp.scale_loss(
+                    loss, optimizer) as scaled:
+                scaled.backward()
+        else:
+            loss.backward()
+
+    def clip_grad_norm(max_norm):
+        """
+        Applies gradient clipping.
+        """
+        if args.fp16:
+            params = amp.master_params(optimizer)
+            clip_grad_norm_(params, max_norm)
+        else:
+            clip_grad_norm_(
+                model.parameters(), max_norm)
+
+    def get_value(result, name):
+        """
+        Returns the value of the metrics from the
+        results dict.
+        """
+        return min(max(result[name], -1e20), 1e20)
+
+    # setting up logging and progress bar
+    trainer = SafeEngine(train_step)
+    valid_eval = SafeEngine(eval_step)
+
+    metrics = ['loss', 'acc', 'ppl']
+
+    tracked = product([trainer, valid_eval], metrics)
+    for engine, name in tracked:
+        output_transform = partial(get_value, name=name)
+
+        metric = RunningAverage(
+            output_transform=output_transform, alpha=0.8)
+        metric.attach(engine, name)
+
+    l_bar = '{desc}[{n_fmt}/{total_fmt}] '
+    bar = '{percentage:3.0f}%|{bar}'
+    r_bar = '{rate_fmt}{postfix} [{elapsed}<{remaining}]'
+
+    pbar = ProgressBar(bar_format=l_bar + bar + r_bar)
+    pbar.attach(trainer, metric_names=metrics)
+
+    # adding model checkpoint handler
+    checkpoint = ModelCheckpoint(
+        args.model_dir, args.pretrained,
+        n_saved=5,
+        require_empty=False,
+        save_as_state_dict=True,
+        score_function=lambda e: -e.state.metrics['loss'])
+
+    checkpoint_dict = {
+        'model': model,
+        'optim': optimizer
+    }
+
+    if args.fp16:
+        checkpoint_dict['amp'] = amp
+
+    valid_eval.add_event_handler(
+        Events.COMPLETED, checkpoint, checkpoint_dict)
+
+    early_stopping = EarlyStopping(
+        patience=args.patience,
+        score_function=lambda e: -e.state.metrics['loss'],
+        trainer=trainer)
+
+    valid_eval.add_event_handler(
+        Events.COMPLETED, early_stopping)
+
+    # loading history for training logs
+    history_path = join(args.model_dir, 'history.json')
+
+    history = defaultdict(list)
+
+    # NOTE the hardcoded values to keep track of
+    # in the history
+    headers = ['epoch'] + list(
+        ''.join(n) for n in  product(
+            ['train_', 'valid_'], metrics))
+
+    if exists(history_path):
+        with open(history_path, 'r') as fh:
+            history = json.load(fh)
 
     def record_history(results):
         """
-        Records the results and prints them.
+        Records the results to the history.
         """
         # saving history and handling unexpected
         # keyboard interrupt
@@ -504,331 +613,76 @@ def main():
             except KeyboardInterrupt:
                 pass
 
-    @contextmanager
-    def skip_error():
+    def run_eval(evaluator, loader, prefix):
         """
-        Convenience function for skipping errors.
+        Runs evaluation with the given evaluator.
         """
-        nonlocal skip
-
-        try:
-            # checking out of memory error and
-            # proceeding if only a single GPU
-            # is used for the training
-            yield
-
-        except RuntimeError as e:
-            if 'out of memory' in str(e):
-                if args.distributed:
-                    raise e
-                skip += 1
-
-    def reduce_tensor(tensor):
-        """
-        Averages a tensor across gpus.
-        """
-        reduced = tensor.clone()
-        all_reduce(reduced, op=ReduceOp.SUM)
-        reduced /= world_size
-
-        return reduced
-
-    def forward_step(batch):
-        """
-        Applies forward pass with the given batch.
-        """
-        inputs, targets = batch
-
-        outputs = model(inputs, half=args.fp16)
-
-        # converting targets from ndarray
-        targets = torch.as_tensor(targets)
-        targets = targets.long().to(device)
-
-        loss, acc, ppl = compute_loss(
-            outputs=outputs,
-            targets=targets,
-            ignore_idx=pad_idx)
-
-        if args.distributed:
-            # reducing accuracy accross devices
-            # for more accurate logging
-            acc = reduce_tensor(acc)
-
-        return loss, acc.item(), ppl
-
-    def train_step(batch):
-        """
-        Performs a single step of training.
-        """
-        nonlocal step, skip
-
-        loss, acc, ppl = forward_step(batch)
-
-        if torch.isnan(loss).item():
-            # during distributed training NaN
-            # values are not handled
-            if args.distributed:
-                raise ValueError(
-                    'NaN values encountered.')
-
-            logger.debug('skipping step (nan)')
-            # returning None values when a NaN loss
-            # is encountered and skipping backprop
-            # so model grads will not be corrupted
-
-            skip += 1
-            return None, None
-
-        loss /= args.grad_accum_steps
-
-        backward(loss)
-
-        if args.clip_grad is not None:
-            clip_grad_norm(args.clip_grad)
-
-        if step % args.grad_accum_steps == 0:
-            set_lr_fn(step)
-            optimizer.step()
-            optimizer.zero_grad()
-
-        if args.distributed:
-            # reducing loss accross devices for
-            # more accurate logging
-            loss = reduce_tensor(loss)
-
-        step += 1
+        evaluator.run(loader)
+        results = evaluator.state.metrics
 
         return {
-            'loss': loss.item(), 
-            'acc': acc, 
-            'ppl': ppl
+            prefix + '_' + metric: results[metric]
+            for metric in metrics
         }
 
-    def backward(loss):
+    @trainer.on(Events.STARTED)
+    def setup_state(engine):
         """
-        Backpropagates the loss in either mixed or
-        normal precision mode.
+        Sets the epoch to the resumed epoch.
         """
-        # cuda is required for mixed precision training.
-        if args.fp16:
-            with amp.scale_loss(
-                    loss, optimizer) as scaled:
-                scaled.backward()
-        else:
-            loss.backward()
+        if 'epoch' in history and \
+                len(history['epoch']) > 0:
+            engine.state.epoch = history['epoch'][-1]
 
-    def clip_grad_norm(max_norm):
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_eval_results(trainer):
         """
-        Applies gradient clipping.
+        Logs the training results.
         """
-        if args.fp16:
-            clip_grad_norm_(
-                amp.master_params(optimizer), max_norm)
-        else:
-            clip_grad_norm_(model.parameters(), max_norm)
+        results = {'epoch': trainer.state.epoch}
 
-    def evaluate(dataset, num_steps):
-        """
-        Constructs a validation loader and evaluates
-        the model.
-        """
-        loop = tqdm(
-            dataset(), 'eval',
-            num_steps, False,
-            disable=not master_process)
+        results.update({
+            'train_' + metric: \
+                trainer.state.metrics[metric]
+            for metric in metrics
+        })
 
-        model.eval()
+        results.update(run_eval(
+            valid_eval, valid_dataset, 'valid'))
 
-        for batch in loop:
-            with skip_error():
-                loss, accuracy, ppl = forward_step(batch)
+        record_history(results)
 
-                loop.set_postfix(OrderedDict(
-                    loss=loss.item(), ppl=ppl, acc=accuracy))
+        data = list(zip(*[history[h] for h in headers]))
+        table = tabulate(data, headers, floatfmt='.3f')
 
-                yield loss.item(), accuracy, ppl
+        print(table.split('\n')[-1])
 
-    def save_state(name):
-        """
-        Saves the model and optimizer state.
-        """
-        model_path = join(model_dir, name + '.pt')
+    @trainer.on(Events.EXCEPTION_RAISED)
+    def handle_exception(engine, e):
+        if isinstance(e, KeyboardInterrupt) and \
+                engine.state.iteration > 1:
+            engine.terminate()
 
-        state = {
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'best_valid_loss': best_valid_loss,
-            'valid_loss': valid_loss,
-            'epoch': epoch + 1,
-            'step': step
-        }
-
-        logger.info('Saving model to {}'.format(model_path))
-        # making sure the model saving is not left in a
-        # corrupted state after a keyboard interrupt
-        while True:
-            try:
-                torch.save(state, model_path)
-                break
-            except KeyboardInterrupt:
+        elif isinstance(e, RuntimeError):
+            if 'out of memory' in str(e):
                 pass
 
-    if master_process:
-        train_args = vars(args)
-        logger.info(str(train_args))
+            else:
+                raise e
 
-        print()
-        print(tabulate(train_args.items(), tablefmt='presto'))
-        print()
+    print()
+    print(tabulate(vars(args).items(), tablefmt='presto'))
+    print()
 
-    try:
-        # initializing cuda buffer to avoid OOM errors
-        dummy_batch = create_dummy_batch(
-            args, ignore_idx=pad_idx)
+    data = list(zip(*[history[h] for h in headers]))
 
-        train_step(dummy_batch)
+    # printing the initial table headers and 
+    # previous results of the training if resuming
+    print(tabulate(data, headers, floatfmt='.3f'))
 
-    except (RuntimeError, ValueError) as e:
-        if 'out of memory' in str(e):
-            msg = 'Not enough memory, there might ' + \
-                'be several out of memory error during ' + \
-                'training. To avoid this lower ' + \
-                'the `--batch_size` or `--max_len`'
-
-            if not args.grad_ckpt:
-                msg += ', use the `--checkpointed` flag'
-
-            if not APEX_INSTALLED:
-                msg += ' or install apex for fp16 precision'
-
-            logger.info(msg + '.')
-
-        if args.distributed:
-            return
-
-    # creating table of history with correctly
-    # arranged values for each header
-    if master_process:
-        table = list(zip(*[history[h] for h in headers]))
-        print(tabulate(table, headers, floatfmt='.3f'))
-
-    for epoch in range(init_epoch, args.max_epochs):
-        # running training loop
-        loop = tqdm(
-            train_dataset(), 'train {}'.format(epoch),
-            num_train_steps, False,
-            disable=not master_process)
-
-        train_metrics = defaultdict(list)
-
-        model.train()
-
-        for batch in loop:
-            with skip_error():
-                results = train_step(batch)
-
-                loss = results['loss']
-                if master_process and loss is not None:
-                    # adding the results to history
-                    # and logging them to tensorboard
-                    for metric, value in results.items():
-                        train_metrics[metric].append(value)
-
-                        if value == float('inf'):
-                            value = 1e30
-
-                        writer.add_scalar(
-                            'train/' + metric, value, step)
-
-                loop.set_postfix(OrderedDict(
-                    **results, skip=skip))
-
-        train_metrics = {
-            'train_' + metric: mean(values) 
-                if len(values) > 0 else 0.0
-            for metric, values in train_metrics.items()
-        }
-
-        with torch.no_grad():
-            valid_metrics = zip(*evaluate(
-                dataset=valid_dataset,
-                num_steps=num_valid_steps))
-
-        valid_loss, valid_acc, valid_ppl = [
-            mean(values) if len(values) > 0 else 0.0
-            for values in valid_metrics
-        ]
-
-        # switching back to training
-        model.train()
-
-        if master_process:
-            results = {'epoch': epoch}
-
-            results.update(train_metrics)
-
-            results.update({
-                'valid_loss': valid_loss,
-                'valid_acc': valid_acc,
-                'valid_ppl': valid_ppl
-            })
-
-            record_history(results)
-            print_results(results)
-
-            # converting ppl to a large number so tensorboard
-            # will not throw any warnings during training
-            if valid_ppl == float('inf'):
-                valid_ppl = 1e30
-
-            # logging to tensorboard
-            writer.add_scalar('val/loss', valid_loss, step)
-            writer.add_scalar('val/acc', valid_acc, step)
-            writer.add_scalar('val/ppl', valid_ppl, step)
-
-        if master_process:
-            save_state(name='last')
-
-        if valid_loss < best_valid_loss:
-            patience = 0
-            best_valid_loss = valid_loss
-
-            if master_process:
-                save_state(name='best')
-
-        else:
-            patience += 1
-            if patience == args.patience:
-                # terminate when max patience
-                # level is hit
-                break
-
-        if step == args.total_steps:
-            break
-
-    if master_process:
-        writer.close()
-
-    with torch.no_grad():
-        test_metrics = zip(*evaluate(
-            dataset=test_dataset,
-            num_steps=num_test_steps))
-
-    test_loss, test_acc, test_ppl = [
-        mean(values) if len(values) > 0 else 0.0
-        for values in test_metrics
-    ]
-
-    if master_process:
-        logger.info('test loss: {:.4}'.format(
-            test_loss))
+    trainer.run(train_dataset, args.max_epochs)
 
 
 if __name__ == '__main__':
-    try:
-        main()
+    main()
 
-    except KeyboardInterrupt:
-        # exiting training with Ctrl + C
-        pass
