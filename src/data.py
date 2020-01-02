@@ -256,22 +256,34 @@ def create_loader(
         """
         return tf.size(example['input_ids'])
 
-    def add_attn_mask(example):
+    def prepare_inputs(example):
         """
-        Creates the attention mask tensor.
+        Creates the attention mask tensor and replaces
+        1 and 0s in type id tensor with SP ids.
         """
         attn_mask = tf.equal(
             example['input_ids'], pad_id)
 
         example['attn_mask'] = attn_mask
 
+        type_ids = tf.dtypes.cast(
+            example['type_ids'], tf.bool)
+
+        cond = type_ids if \
+            tf.random.uniform(shape=(1, )) > 0.5 else \
+            ~type_ids
+
+        example['type_ids'] = tf.where(
+            cond, x=specials.SP1, y=specials.SP2)
+
         return example
 
     dataset = tf.data.TFRecordDataset(filenames)
-    
+
     if args.distributed:
         dataset = dataset.shard(
-            num_shards=int(os.environ.get('WORLD_SIZE', 1)), 
+            num_shards=int(
+                os.environ.get('WORLD_SIZE', 1)),
             index=args.local_rank)
 
     dataset = dataset.shuffle(1000)
@@ -301,7 +313,7 @@ def create_loader(
 
     # creating attention masking tensor
     dataset = dataset.map(
-        add_attn_mask,
+        prepare_inputs,
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     dataset = dataset.prefetch(

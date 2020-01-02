@@ -349,7 +349,7 @@ def main():
     # loading model from checkpoint or from
     # pretrained weights
     model_ckpt_path = get_last_checkpoint(
-        model_dir=args.model_dir, 
+        model_dir=args.model_dir,
         pattern=get_save_pattern('model'))
 
     if model_ckpt_path is not None:
@@ -385,7 +385,7 @@ def main():
             model, optimizer, opt_level='O2')
 
         amp_ckpt_path = get_last_checkpoint(
-            model_dir=args.model_dir, 
+            model_dir=args.model_dir,
             pattern=get_save_pattern('amp'))
 
         if amp_ckpt_path is not None:

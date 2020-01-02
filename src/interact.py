@@ -94,7 +94,7 @@ def create_response_generator(
     """
     Creates a generator decoder function.
     """
-    def encode_inputs(text):
+    def encode_inputs(text, past):
         """
         Creates the input_ids and type_ids.
         """
@@ -102,9 +102,10 @@ def create_response_generator(
         ids.append(specials.EOS)
 
         input_ids = torch.tensor(ids).long().to(device)
-        type_ids = torch.zeros_like(input_ids)
+        type_ids = torch.full_like(
+            input_ids, specials.SP1)
 
-        return input_ids, type_ids, None
+        return input_ids, type_ids, past
 
     def decode_output(ids):
         """
@@ -119,10 +120,13 @@ def create_response_generator(
         """
         Generator function that yields responses.
         """
+        past = None
+
         while True:
             text = yield
 
-            inputs = encode_inputs(text)
+            inputs = encode_inputs(text, past)
+
             output_ids, past = greedy_decode(
                 inputs=inputs, model=model,
                 specials=specials, args=args)
@@ -136,14 +140,13 @@ def greedy_decode(inputs, model, specials, args):
     """
     Applies greedy decoding to the input.
     """
-    def append_to_tensor(tensor, value):
+    device = next(model.parameters()).device
+
+    def as_tensor(value):
         """
         Concats a value to the end of the tensor.
         """
-        device = tensor.device
-
-        return torch.tensor(
-            tensor.tolist() + [value]).long().to(device)
+        return torch.tensor([value]).long().to(device)
 
     select_fn = METHODS[args.decoding]
 
@@ -176,8 +179,8 @@ def greedy_decode(inputs, model, specials, args):
         if pred == specials.EOS:
             break
 
-        input_ids = append_to_tensor(input_ids, pred)
-        type_ids = append_to_tensor(type_ids, 1)
+        input_ids = as_tensor(pred)
+        type_ids = as_tensor(specials.SP2)
 
         outputs.append(pred)
 
@@ -224,7 +227,8 @@ def select_nucleus(args, logits, force_no_eos_id=None):
 
     for idx in range(logits.size(0)):
         indices_to_remove = \
-            sorted_indices[idx, sorted_indices_to_remove[idx]]
+            sorted_indices[
+                idx, sorted_indices_to_remove[idx]]
 
         logits[idx, indices_to_remove] = float('-inf')
 
@@ -294,3 +298,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

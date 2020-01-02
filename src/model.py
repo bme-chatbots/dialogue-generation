@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 #
@@ -28,7 +27,8 @@ from torch.nn.modules import (
 from torch.nn.init import normal_
 
 from torch.nn.functional import (
-    softmax, linear)
+    softmax, linear,
+    one_hot)
 
 
 def setup_model_args(parser):
@@ -217,11 +217,11 @@ class Attention(torch.nn.Module):
             past_key, past_value = \
                 past[0].transpose(-2, -1), past[1]
 
-            key = torch.cat((past_key, key), dim=-1)
-            value = torch.cat((past_value, value), dim=-2)
+            key = torch.cat([past_key, key], dim=-1)
+            value = torch.cat([past_value, value], dim=-2)
 
-        present = torch.stack(
-            (key.transpose(-2, -1), value))
+        present = torch.stack([
+            key.transpose(-2, -1), value])
 
         attn_outputs = self._attn(
             query, key, value, attn_mask)
