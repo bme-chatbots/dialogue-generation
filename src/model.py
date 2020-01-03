@@ -1,283 +1,481 @@
-"""
-@author:    Patrik Purgai
-@copyright: Copyright 2019, dialogue-generation
-@license:   MIT
-@email:     purgai.patrik@gmail.com
-@date:      2019.04.04.
-"""
+# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
+# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# pylint: disable=no-member
-# pylint: disable=not-callable
 
 import os
 import torch
-import random
+import argparse
+
+from math import sqrt, pi
 
 from torch.nn.modules import (
-    ModuleList, Module)
+    Embedding, Linear, Dropout,
+    LayerNorm)
 
-from torch.nn import (
-    Linear, Parameter)
+from torch.nn.init import normal_
 
-from transformers import (
-    XLNetLMHeadModel, XLNetConfig,
-    XLNetModel, GPT2Config,
-    GPT2LMHeadModel)
-
-from transformers.modeling_xlnet import XLNetLayer
-from transformers.modeling_gpt2 import Block
-
-from datetime import datetime
-from collections import namedtuple
-
-from torch.utils.checkpoint import checkpoint
-
-from os.path import (
-    exists, join,
-    dirname, abspath)
+from torch.nn.functional import (
+    softmax, linear,
+    one_hot)
 
 
 def setup_model_args(parser):
     """
-    Sets up the model arguments.
+    Parses the model related arguments.
     """
-    group = parser.add_argument_group('model')
-    group.add_argument(
-        '-m', '--model',
-        type=str,
-        default='gpt2',
-        choices=list(MODEL),
-        help='Name of the model.')
-    group.add_argument(
-        '--grad_ckpt',
+    parser.add_argument(
+        '--pretrained',
+        default='124M',
+        choices=['124M', '355M', '774M', '1558M'],
+        help='Name of the pretrained model to use.')
+    parser.add_argument(
+        '--output_attentions',
         action='store_true',
-        help='Use checkpointed models.')
-    group.add_argument(
-        '--name',
-        type=str,
-        default=datetime.today().strftime(
-            '%y.%m.%d-%H:%M:%S'),
-        help='Name of the trained model instance.')
-    group.add_argument(
-        '--model_dir',
-        type=str,
-        default=join(abspath(dirname(__file__)), 
-            '..', 'model'),
-        help='Path of the model checkpoints.')
+        help='Flag whether to output attention values.')
+    parser.add_argument(
+        '--output_hidden_states',
+        action='store_true',
+        help='Flag whether to output hidden state values.')
+    parser.add_argument(
+        '--output_past',
+        action='store_true',
+        help='Output past values.')
+    parser.add_argument(
+        '--vocab_size',
+        type=int,
+        default=None,
+        help='Size of the model vocabulary.')
+    parser.add_argument(
+        '--n_positions',
+        type=int,
+        default=1024,
+        help='Size of the position embedding.')
+    parser.add_argument(
+        '--resid_pdrop',
+        type=float,
+        default=0.1,
+        help='Probability for the residual dropout.')
+    parser.add_argument(
+        '--attn_pdrop',
+        type=float,
+        default=0.1,
+        help='Probability for the attention dropout.')
+    parser.add_argument(
+        '--embd_pdrop',
+        type=float,
+        default=0.1,
+        help='Probabilirt for the embedding dropout.')
+    parser.add_argument(
+        '--layer_norm_epsilon',
+        type=float,
+        default=1e-5,
+        help='Epsilon value for layer normalization.')
+    parser.add_argument(
+        '--initializer_range',
+        type=float,
+        default=0.2,
+        help='Initialization range dor the variables.')
 
 
-def create_model(args, model_dir, vocab_size):
+def gelu(x):
     """
-    Creates the classifier and encoder model.
+    Gaussian Error Linear Unit.
+    This is a smoother version of the ReLU.
     """
-    pretrained_dir = join(args.model_dir, args.model)
-
-    model_path = join(
-        pretrained_dir, 'pytorch_model.bin')
-
-    model_cls = MODEL[args.model](args)
-
-    if not exists(model_path):
-        model = model_cls.from_pretrained(
-            args.model)
-
-        model.resize_token_embeddings(vocab_size)
-        model.save_pretrained(pretrained_dir)
-
-    else:
-        model = model_cls.from_pretrained(
-            pretrained_dir)
-
-    return model
+    return x * 0.5 * (
+        1 + torch.tanh(
+            sqrt(2 / pi) *
+            (x + 0.044715 * torch.pow(x, 3))))
 
 
-def compute_size(model):
+# based on Huggingface/transformers implementation
+class Conv1D(torch.nn.Module):
     """
-    Computes the number of parameters of the model.
-    """
-    return sum(
-        p.numel() for 
-        p in model.parameters())
-
-
-def convert_to_float(tensor, half=False):
-    """
-    Converts the tensor to either float32
-    or float16 based on the parameter.
-    """
-    return tensor.half() if half else tensor.float()
-
-
-class CkptGPT2Layer(Module):
-    """
-    Wrapper class to perform checkpointing of
-    Block ( GPT2Layer ) modue.
+    Basically works like a Linear layer but the
+    weights are transposed.
     """
 
-    def __init__(self, module):
+    def __init__(self, d_out, d_in):
         super().__init__()
 
-        self.module = module
+        self.d_out = d_out
 
-    def forward_wrapper(self, *args, **kwargs):
-        """
-        Converts the forward function's output
-        to a tuple.
-        """
-        return tuple(
-            self.module.forward(*args, **kwargs))
+        weight = torch.empty(d_in, d_out)
+        normal_(weight, std=0.02)
 
-    def forward(
-            self, x, layer_past=None, 
-            attention_mask=None, head_mask=None):
+        self.weight = torch.nn.Parameter(weight)
+        self.bias = torch.nn.Parameter(torch.zeros(d_out))
 
-        return checkpoint(
-            self.forward_wrapper, x, layer_past,
-            attention_mask, head_mask)
+    def forward(self, inputs):
+        size_out = inputs.size()[:-1] + (self.d_out, )
+
+        out = torch.addmm(
+            self.bias,
+            inputs.view(-1, inputs.size(-1)),
+            self.weight)
+
+        out = out.view(*size_out)
+
+        return out
 
 
-class CkptXLNetLayer(Module):
+# based on Huggingface/transformers implementation
+class Attention(torch.nn.Module):
     """
-    Wrapper class to perform checkpointing of
-    XLNetLayer modue.
+    Self attention module for the GPT-2 model.
     """
 
-    def __init__(self, module):
+    def __init__(
+            self, n_embd, n_ctx, config, scale=False):
         super().__init__()
-        
-        self.module = module
+
+        self.output_attentions = config.output_attentions
+
+        self.register_buffer(
+            'bias', torch.tril(
+                torch.ones(n_ctx, n_ctx)).view(
+                    1, 1, n_ctx, n_ctx))
+
+        self.n_head = config.n_head
+        self.split_size = n_embd
+        self.scale = scale
+
+        self.c_attn = Conv1D(n_embd * 3, n_embd)
+        self.c_proj = Conv1D(n_embd, n_embd)
+
+        self.attn_dropout = Dropout(config.attn_pdrop)
+        self.resid_dropout = Dropout(config.resid_pdrop)
+
+    def _attn(self, query, key, value, attn_mask=None):
+        scores = torch.matmul(query, key)
+
+        if self.scale:
+            scores = scores / value.size(-1) ** 0.5
+
+        nd, ns = scores.size()[-2:]
+
+        bias = self.bias[:, :, ns - nd : ns, :ns]
+        scores = scores * bias - 1e4 * (1 - bias)
+
+        if attn_mask is not None:
+            scores = scores.masked_fill(
+                attn_mask, float('-inf'))
+
+        scores = softmax(scores, dim=-1)
+        scores = self.attn_dropout(scores)
+
+        outputs = [torch.matmul(scores, value)]
+
+        if self.output_attentions:
+            outputs.append(scores)
+
+        return outputs
+
+    def merge_heads(self, inputs):
+        inputs = inputs.permute(0, 2, 1, 3).contiguous()
+
+        new_shape = inputs.size()[:-2] + (
+            inputs.size(-2) * inputs.size(-1), )
+
+        return inputs.view(*new_shape)
+
+    def split_heads(self, inputs, is_key=False):
+        new_shape = inputs.size()[:-1] + \
+            (self.n_head, inputs.size(-1) // self.n_head)
+
+        inputs = inputs.view(*new_shape)
+
+        if is_key:
+            return inputs.permute(0, 2, 3, 1)
+        else:
+            return inputs.permute(0, 2, 1, 3)
 
     def forward(
-            self, output_h, output_g, attn_mask_h,
-            attn_mask_g, r, seg_mat, mems=None, 
-            target_mapping=None, head_mask=None):
-        # delegating the parameters of the original
-        # XLNetLayer module to the checkpoint call
+            self, inputs, past=None, attn_mask=None):
+        out = self.c_attn(inputs)
 
-        return checkpoint(
-            self.module.forward, output_h, output_g,
-            attn_mask_h, attn_mask_g, r, seg_mat,
-            mems, target_mapping, head_mask)
+        query, key, value = out.split(
+            self.split_size, dim=2)
+
+        query = self.split_heads(query)
+        key = self.split_heads(key, is_key=True)
+        value = self.split_heads(value)
+
+        if past is not None:
+            past_key, past_value = \
+                past[0].transpose(-2, -1), past[1]
+
+            key = torch.cat([past_key, key], dim=-1)
+            value = torch.cat([past_value, value], dim=-2)
+
+        present = torch.stack([
+            key.transpose(-2, -1), value])
+
+        attn_outputs = self._attn(
+            query, key, value, attn_mask)
+
+        attn_out = attn_outputs[0]
+
+        attn_out = self.merge_heads(attn_out)
+        attn_out = self.c_proj(attn_out)
+        attn_out = self.resid_dropout(attn_out)
+
+        return [attn_out, present] + attn_outputs[1:]
 
 
-def create_xlnet_model(args):
+# based on Huggingface/transformers implementation
+class MLP(torch.nn.Module):
     """
-    Creates an XLNet generator model.
+    Fully connected layer for GPT-2 layer.
     """
-    class XLNetGenerator(XLNetLMHeadModel):
-        """
-        Generator model based on XLNet language model.
-        """
 
-        def __init__(self, config):
-            super().__init__(config)
+    def __init__(self, n_state, config):
+        super().__init__()
 
-            if args.grad_ckpt:
-                self.transformer.layer = ModuleList([
-                    CkptXLNetLayer(layer) for
-                    layer in self.transformer.layer
-                ])
-        
-        def resize_bias(self, new_num_tokens=None):
-            """
-            Fix that also copies the weights of bias
-            in the output layer.
-            """
-            new_bias = torch.zeros(new_num_tokens)
+        n_embd = config.n_embd
+        self.c_fc = Conv1D(n_state, n_embd)
+        self.c_proj = Conv1D(n_embd, n_state)
+        self.act = gelu
+        self.dropout = Dropout(config.resid_pdrop)
 
-            old_size = self.lm_loss.bias.size(0)
+    def forward(self, inputs):
+        out = self.act(self.c_fc(inputs))
+        out = self.c_proj(out)
 
-            new_bias[:old_size] = self.lm_loss.bias
-            self.lm_loss.bias = Parameter(new_bias)
-
-        def resize_token_embeddings(
-                self, new_num_tokens=None):
-            """
-            Extends the resize fn by resizing the bias layer.
-            """
-            super().resize_token_embeddings(new_num_tokens)
-            self.resize_bias(new_num_tokens)
-
-        def forward(self, inputs, half=False):
-            # converting the batch of inputs to torch tensor
-            parameter = next(self.parameters())
-
-            inputs = [
-                torch.as_tensor(t).to(
-                    parameter.device, 
-                    non_blocking=True) 
-                for t in inputs
-            ]
-
-            input_ids, token_type_ids, attn_mask, \
-                perm_mask, target_map = inputs
-
-            attn_mask = convert_to_float(
-                tensor=attn_mask, half=half)
-
-            perm_mask = convert_to_float(
-                tensor=perm_mask, half=half)
-
-            target_map = convert_to_float(
-                tensor=target_map, half=half)
-
-            outputs = super().forward(
-                input_ids=input_ids.long(),
-                token_type_ids=token_type_ids.long(),
-                attention_mask=attn_mask,
-                perm_mask=perm_mask,
-                target_mapping=target_map)
-
-            return outputs
-
-    return XLNetGenerator
+        return self.dropout(out)
 
 
-def create_gpt2_model(args):
+# based on Huggingface/transformers implementation
+class Block(torch.nn.Module):
     """
-    Creates a gpt2 generator model.
+    Layer block for the GPT-2 model.
     """
-    class GPT2Generator(GPT2LMHeadModel):
+
+    def __init__(self, n_ctx, config, scale=False):
+        super().__init__()
+
+        n_embd = config.n_embd
+
+        self.ln_1 = LayerNorm(
+            n_embd, eps=config.layer_norm_epsilon)
+
+        self.ln_2 = LayerNorm(
+            n_embd, eps=config.layer_norm_epsilon)
+
+        self.attn = Attention(
+            n_embd, n_ctx, config, scale)
+
+        self.mlp = MLP(4 * n_embd, config)
+
+    def forward(
+            self, inputs, past=None, attn_mask=None):
+
+        attn_outputs = self.attn(
+            self.ln_1(inputs),
+            past=past,
+            attn_mask=attn_mask)
+
+        attn_out = attn_outputs[0]
+
+        out = inputs + attn_out
+        ff_out = self.mlp(self.ln_2(out))
+        out = out + ff_out
+
+        outputs = [out] + attn_outputs[1:]
+        return outputs
+
+
+# based on Huggingface/transformers implementation
+class GPT2(torch.nn.Module):
+    """
+    The GPT-2 base model.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+
+        self.config = config
+
+        self.output_hidden_states = \
+            config.output_hidden_states
+
+        self.output_attentions = config.output_attentions
+        self.output_past = config.output_past
+
+        self.wte = Embedding(
+            config.vocab_size, config.n_embd)
+        self.wpe = Embedding(
+            config.n_positions, config.n_embd)
+
+        self.drop = Dropout(config.embd_pdrop)
+
+        self.h = torch.nn.ModuleList([
+            Block(config.n_ctx, config, scale=True)
+            for _ in range(config.n_layer)
+        ])
+
+        self.ln_f = LayerNorm(
+            config.n_embd,
+            eps=config.layer_norm_epsilon)
+
+        self.init_weights()
+
+    def expand_embeddings(self, size):
         """
-        Generator model based on GPT2 language model.
+        Increases the size of embedding by the given
+        amount.
         """
+        old_size, n_embd = self.wte.weight.size()
 
-        def __init__(self, config):
-            super().__init__(config)
+        new_wte = Embedding(old_size + size, n_embd)
+        new_wte.to(self.wte.weight.device)
 
-            if args.grad_ckpt:
-                self.transformer.h = ModuleList([
-                    CkptGPT2Layer(layer) for
-                    layer in self.transformer.h
-                ])
+        self._init_weights(new_wte)
 
-        def forward(self, inputs, half=False):
-            # converting the batch of inputs to torch tensor
-            device = next(self.parameters()).device
+        new_wte.weight.data[:old_size, :] = \
+            self.wte.weight.data
 
-            inputs = [
-                torch.as_tensor(t).to(
-                    device, non_blocking=True) 
-                for t in inputs
-            ]
+        self.wte = new_wte
 
-            input_ids, token_type_ids = inputs
+    def init_weights(self):
+        self.apply(self._init_weights)
 
-            outputs = super().forward(
-                input_ids=input_ids.long(),
-                token_type_ids=token_type_ids.long())
-            
-            return outputs
+    def _init_weights(self, module):
+        """
+        Initialize the weights.
+        """
+        if isinstance(
+                module, (Linear, Embedding, Conv1D)):
+            module.weight.data.normal_(
+                mean=0.0,
+                std=self.config.initializer_range)
 
-    return GPT2Generator
+            if isinstance(
+                module, (Linear, Conv1D)) and \
+                    module.bias is not None:
+                module.bias.data.zero_()
 
+        elif isinstance(module, LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
 
-MODEL = {
-    'xlnet-base-cased':     create_xlnet_model, 
-    'xlnet-large-cased':    create_xlnet_model, 
-    'distilgpt2':           create_gpt2_model,
-    'gpt2':                 create_gpt2_model,
-    'gpt2-medium':          create_gpt2_model,
-    'gpt2-large':           create_gpt2_model,
-    'gpt2-xl':              create_gpt2_model
-}
+    def forward(self, input_ids, past=None,
+                attn_mask=None, type_ids=None,
+                position_ids=None):
+
+        input_shape = input_ids.size()
+
+        if type_ids is not None:
+            type_ids = type_ids.view(
+                -1, input_shape[-1])
+
+        if position_ids is not None:
+            position_ids = position_ids.view(
+                -1, input_shape[-1])
+
+        if past is None:
+            past_length = 0
+            past = [None] * len(self.h)
+
+        else:
+            past_length = past[0][0].size(-2)
+
+        if position_ids is None:
+            device = input_ids.device
+
+            position_ids = torch.arange(
+                past_length,
+                input_shape[-1] + past_length,
+                dtype=torch.long, device=device)
+
+            position_ids = position_ids\
+                .unsqueeze(0).view(-1, input_shape[-1])
+
+        if attn_mask is not None:
+            attn_mask = attn_mask.view(
+                -1, input_shape[-1])
+
+            attn_mask = attn_mask\
+                .unsqueeze(1).unsqueeze(2)
+
+        inputs_embeds = self.wte(input_ids)
+        position_embeds = self.wpe(position_ids)
+
+        if type_ids is not None:
+            type_embeds = self.wte(type_ids)
+        else:
+            type_embeds = 0
+
+        hidden_states = inputs_embeds + \
+            position_embeds + \
+            type_embeds
+
+        hidden_states = self.drop(hidden_states)
+
+        output_shape = input_shape + \
+            (hidden_states.size(-1), )
+
+        presents = ()
+        all_attentions = []
+        all_hidden_states = ()
+        for idx, (block, layer_past) in \
+                enumerate(zip(self.h, past)):
+
+            if self.output_hidden_states:
+                all_hidden_states = all_hidden_states + \
+                    (hidden_states.view(*output_shape), )
+
+            outputs = block(
+                hidden_states,
+                past=layer_past,
+                attn_mask=attn_mask)
+
+            hidden_states, present = outputs[:2]
+            if self.output_past:
+                presents = presents + (present,)
+
+            if self.output_attentions:
+                all_attentions.append(outputs[2])
+
+        hidden_states = self.ln_f(hidden_states)
+
+        hidden_states = hidden_states.view(*output_shape)
+
+        hidden_states = linear(
+            hidden_states, self.wte.weight)
+
+        if self.output_hidden_states:
+            all_hidden_states = all_hidden_states + \
+                (hidden_states, )
+
+        outputs = (hidden_states, )
+
+        if self.output_past:
+            outputs = outputs + (presents, )
+
+        if self.output_hidden_states:
+            outputs = outputs + (all_hidden_states, )
+
+        if self.output_attentions:
+            attention_output_shape = input_shape[:-1] + \
+                (-1,) + all_attentions[0].shape[-2:]
+            all_attentions = tuple(
+                t.view(*attention_output_shape)
+                for t in all_attentions)
+
+            outputs = outputs + (all_attentions, )
+
+        return outputs
+

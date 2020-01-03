@@ -104,8 +104,8 @@ venv.bak/
 .mypy_cache/
 
 model/
-data/
-.vscode
+data/*
+!data/personachat.py
 
 *.html
 *.cpp

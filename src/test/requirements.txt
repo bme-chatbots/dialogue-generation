@@ -1,0 +1,5 @@
+tensorflow=1.12
+torch=1.2
+requests
+tqdm
+regex

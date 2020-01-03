@@ -21,47 +21,36 @@ from os.path import (
 
 # HACK to enable launching with
 # python src/train.py
-PROJECT_PATH = join(abspath(dirname(__file__)), '..')
-if PROJECT_PATH not in sys.path:
-    sys.path.append(PROJECT_PATH)
-
-from src.data import (
-    setup_data_args,
-    create_tokenizer,
-    transform_dialog,
-    RSP, SP1, SP2, HST)
-
-from src.model import (
-    create_model,
-    setup_model_args)
-
-from src.train import set_random_seed
-
-from src.collate import PREPARE, COLLATE
+PROJECT_DIR = join(abspath(dirname(__file__)), '..')
+if PROJECT_DIR not in sys.path:
+    sys.path.append(PROJECT_DIR)
 
 from torch.nn.functional import softmax
 
+from src.model import (
+    GPT2,
+    setup_model_args)
 
-def setup_eval_args():
+from src.utils import (
+    SPECIAL_TOKENS,
+    set_random_seed,
+    load_tokenizer,
+    load_config)
+
+
+def setup_interact_args():
     """
     Sets up the arguments for interaction.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--model_file',
-        type=str,
-        default=None,
+        required=True,
         help='Path to the file of the model.')
-    parser.add_argument(
-        '--ckpt_name',
-        type=str,
-        default='last',
-        choices=['last', 'best'],
-        help='Name of the checkpoint to load.')
     parser.add_argument(
         '--decoding',
         type=str,
-        default='topk',
+        default='nucleus',
         choices=list(METHODS),
         help='Decoding method to use.')
     parser.add_argument(
@@ -85,101 +74,124 @@ def setup_eval_args():
         default=0,
         help='Minimum length of the response sentence.')
     parser.add_argument(
+        '--max_len',
+        type=int,
+        default=50,
+        help='Maximum length of the response sentence.')
+    parser.add_argument(
         '--seed',
         type=int,
         default=None,
         help='Random seed for interactive mode.')
 
-    setup_data_args(parser)
     setup_model_args(parser)
 
     return parser.parse_args()
 
 
-def decode(args, model, inputs, tokenizer, 
-           select_fn, device):
+def create_response_generator(
+        args, model, tokenizer, specials, device):
     """
-    Applies decoding given a model and inputs.
+    Creates a generator decoder function.
     """
-    input_ids, token_type_ids = inputs
+    def encode_inputs(text, past):
+        """
+        Creates the input_ids and type_ids.
+        """
+        ids = tokenizer.encode(text)
+        ids.append(specials.EOS)
 
-    batch_size = len(input_ids)
+        input_ids = torch.tensor(ids).long().to(device)
+        type_ids = torch.full_like(
+            input_ids, specials.SP1)
 
-    if 'xlnet' in args.model:
-        mask_id = tokenizer.convert_tokens_to_ids(
-            tokenizer.mask_token)
+        return input_ids, type_ids, past
 
-    rsp_id, eos_id = \
-        tokenizer.convert_tokens_to_ids([
-            RSP, tokenizer.eos_token
-        ])
+    def decode_output(ids):
+        """
+        Creates output text from the output ids.
+        """
+        return tokenizer.decode(
+            token_id for token_id in ids
+            if token_id not in vars(specials).values())
 
-    preds = [[] for _ in range(batch_size)]
-    finished = set()
+    @torch.no_grad()
+    def generate_response():
+        """
+        Generator function that yields responses.
+        """
+        past = None
+
+        while True:
+            text = yield
+
+            inputs = encode_inputs(text, past)
+
+            output_ids, past = greedy_decode(
+                inputs=inputs, model=model,
+                specials=specials, args=args)
+
+            yield decode_output(output_ids)
+
+    return generate_response
+
+
+def greedy_decode(inputs, model, specials, args):
+    """
+    Applies greedy decoding to the input.
+    """
+    device = next(model.parameters()).device
+
+    def as_tensor(value):
+        """
+        Concats a value to the end of the tensor.
+        """
+        return torch.tensor([value]).long().to(device)
+
+    select_fn = METHODS[args.decoding]
+
+    outputs = []
+
+    input_ids, type_ids, past = inputs
 
     for idx in range(args.max_len):
-        # creating a batch of input ids extended with
-        # the input ids which were predicted by the model
-        curr_input_ids = [
-            ids + pred for ids, pred in 
-            zip(input_ids, preds)]            
-        
-        curr_token_type_ids = [
-            ids + [rsp_id] * len(pred) 
-            for ids, pred in
-            zip(token_type_ids, preds)]
+        hiddens, past = model(
+            input_ids=input_ids,
+            type_ids=type_ids,
+            past=past)
 
-        # xlnet also requires an extra token which will
-        # be predicted ( this can be any token as it
-        # will be masked )
-        if 'xlnet' in args.model:
-            for i in range(batch_size):
-                curr_input_ids[i].append(mask_id)
-                curr_token_type_ids[i].append(rsp_id)
-
-        inputs = PREPARE[args.model](
-            input_ids=curr_input_ids,
-            token_type_ids=curr_token_type_ids)
-
-        # the first value of the output tuple from
-        # the model is the next token logits tensor
-        logits = model(inputs)[0]
-
-        # TODO find a better solution
-        if 'gpt2' in args.model:
-            logits = logits[:, -1]
+        logits = hiddens[-1]
 
         logits = logits.view(-1, logits.size(-1))
 
         # forcing no eos id because the sequence is
         # not min_len long yet
-        force_no_eos_id = None if idx >= args.min_len \
-            else eos_id
-            
+        force_no_eos_id = None if idx >= \
+            args.min_len else specials.EOS
+
         logits = select_fn(args, logits, force_no_eos_id)
 
         probs = softmax(logits, dim=-1)
         pred = torch.multinomial(probs, 1)
-        pred = pred.view(-1)
+        pred = pred.view(-1).item()
 
-        # breaking after eos_id is seen
-        for i, p in enumerate(pred.tolist()):
-            if p == eos_id:
-                finished.add(i)
-            elif i not in finished:
-                preds[i].append(p)
-
-        if len(finished) == batch_size:
+        # breaking after eos_id is seed
+        if pred == specials.EOS:
             break
 
-    return preds
+        input_ids = as_tensor(pred)
+        type_ids = as_tensor(specials.SP2)
+
+        outputs.append(pred)
+
+    return outputs, past
 
 
 # implementation is from Huggingface/transformers repo
 def select_topk(args, logits, force_no_eos_id=None):
     """
     Applies topk sampling decoding.
-    """        
+    """
     if force_no_eos_id is not None:
         logits[:, force_no_eos_id] = float('-inf')
 
@@ -215,8 +227,9 @@ def select_nucleus(args, logits, force_no_eos_id=None):
 
     for idx in range(logits.size(0)):
         indices_to_remove = \
-            sorted_indices[idx, sorted_indices_to_remove[idx]]
-        
+            sorted_indices[
+                idx, sorted_indices_to_remove[idx]]
+
         logits[idx, indices_to_remove] = float('-inf')
 
     return logits
@@ -229,93 +242,43 @@ METHODS = {
 
 
 def main():
-    args = setup_eval_args()
+    args = setup_interact_args()
 
+    args.output_past = True
     args.distributed = False
 
     args.cuda = not args.no_cuda and \
         torch.cuda.is_available()
 
-    if args.seed is not None:
-        set_random_seed(args)
+    if args.seed is not None: set_random_seed(args)
 
     device = torch.device(
         'cuda' if args.cuda else 'cpu')
-    
-    assert args.name is not None, \
-        '`--name` must be given'
 
-    model_dir = join(
-        args.model_dir, args.model, args.name)
+    tokenizer, specials = load_tokenizer(args)
+    args.vocab_size = len(tokenizer.encoder)
 
-    model_path = args.model_file if \
-        args.model_file else \
-        join(model_dir, args.ckpt_name + '.pt')
-    
-    state_dict = torch.load(
-        model_path, map_location=device)
+    config = load_config(args)
+    config.vocab_size += len(SPECIAL_TOKENS)
 
-    del state_dict['optimizer']
+    model = GPT2(config)
 
-    tokenizer = create_tokenizer(args)
+    model_state = torch.load(
+        args.model_file, map_location=device)
+    model.load_state_dict(model_state)
 
-    vocab_size = len(tokenizer)
-
-    model = create_model(args, model_dir, vocab_size)
+    model.eval()
     model = model.to(device)
-    
-    try:
-        model.load_state_dict(state_dict.pop('model'))
-        model.eval()
-    except RuntimeError as e:
-        print(
-            'The provided checkpoint has mismatching '
-            'weights in the parameter dict.')
 
-        print(
-            'WARNING: If the model was trained with '
-            '`--grad_ckpt` you also have to provide '
-            'this argument for this script.')
+    response_generator = create_response_generator(
+        args=args,
+        model=model,
+        tokenizer=tokenizer,
+        specials=specials,
+        device=device)
 
-        sys.exit()
-
-    print()
-    print(tabulate(state_dict.items(), tablefmt='presto'))
-    print()
-
-    history = []
-
-    select_fn = METHODS[args.decoding]
-
-    special_ids = tokenizer.convert_tokens_to_ids([
-        SP1, SP2, tokenizer.bos_token,
-        tokenizer.eos_token, HST, RSP,
-    ])
-
-    @torch.no_grad()
-    def respond(text):
-        """
-        Responds to the given text.
-        """
-        history.append(tokenizer.encode(text))
-
-        inputs = transform_dialog(
-            history[-args.max_hist:],
-            special_ids=special_ids,
-            max_len=args.max_len)
-
-        input_ids, type_ids = inputs
-        inputs = [[input_ids], [type_ids]]
-        
-        preds = decode(
-            args=args, model=model,
-            inputs=inputs, tokenizer=tokenizer,
-            select_fn=select_fn, device=device)[0]
-
-        history.append(preds)
-
-        # last token is the end token
-        return tokenizer.decode(preds)
+    generate_response = response_generator()
+    next(generate_response)
 
     print('Type a sentence for response. ' +
           'CTRL + C to escape.')
@@ -323,10 +286,11 @@ def main():
     while True:
         try:
             print()
-            text = input('User: ')
+            text = input('> ')
             print()
-            output = respond(text)
-            print('Bot: {}'.format(output))
+            output = generate_response.send(text)
+            next(generate_response)
+            print('{}'.format(output))
 
         except KeyboardInterrupt:
             break
@@ -334,3 +298,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
