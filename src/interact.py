@@ -44,7 +44,7 @@ def setup_interact_args():
     """
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--model_file',
+        '--ckpt_file',
         required=True,
         help='Path to the file of the model.')
     parser.add_argument(
@@ -263,9 +263,9 @@ def main():
 
     model = GPT2(config)
 
-    model_state = torch.load(
-        args.model_file, map_location=device)
-    model.load_state_dict(model_state)
+    state_dict = torch.load(
+        args.ckpt_file, map_location=device)
+    model.load_state_dict(state_dict['model'])
 
     model.eval()
     model = model.to(device)

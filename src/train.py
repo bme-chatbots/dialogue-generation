@@ -36,14 +36,9 @@ from datetime import datetime
 from collections import defaultdict
 from tqdm import tqdm
 
-from ignite.contrib.handlers import (
-    ProgressBar)
-
-from ignite.handlers import (
-    ModelCheckpoint, EarlyStopping)
-
+from ignite.contrib.handlers import ProgressBar
+from ignite.handlers import EarlyStopping
 from ignite.metrics import RunningAverage
-
 from ignite._utils import _to_hours_mins_secs
 
 from torch.distributed import (
@@ -58,11 +53,17 @@ from torch.nn.functional import (
 from torch.nn.parallel import (
     DistributedDataParallel)
 
-from torch.optim import AdamW
+# HACK pytorch 1.1 compatibility
+try:
+    from torch.optim import AdamW
+
+except ImportError:
+    from torch.optim import Adam as AdamW
 
 from os.path import (
     exists, join,
-    abspath, dirname)
+    abspath, dirname,
+    basename)
 
 # HACK to enable launching with
 # python src/train.py
@@ -77,7 +78,6 @@ from src.model import (
 from src.utils import (
     SPECIAL_TOKENS,
     set_random_seed,
-    get_last_checkpoint,
     download_config,
     load_config,
     download_tokenizer,
@@ -85,6 +85,7 @@ from src.utils import (
     download_pretrained,
     execute_with_master,
     load_weights,
+    SaveableModelCheckpoint,
     SafeEngine,
     Events)
 
@@ -268,9 +269,16 @@ def compute_loss(logits, targets, ignore_idx):
     acc = correct / num_targets
     loss = loss / num_targets
 
-    ppl = torch.exp(loss).item()
+    ppl = torch.exp(loss)
 
-    return {'loss': loss, 'acc': acc, 'ppl': ppl}
+    return loss, acc, ppl
+
+
+def score_function(engine):
+    """
+    Pickleable score funciton to model checkpoint.
+    """
+    return engine.state.metrics['loss']
 
 
 def main():
@@ -278,21 +286,6 @@ def main():
     Performs training, validation and testing.
     """
     args = setup_train_args()
-
-    def get_save_pattern(asset_name):
-        """
-        Returns the saving file pattern.
-        """
-        return r'{}_{}_\d+.pth'.format(
-            args.pretrained, asset_name)
-
-    def load_asset(asset_state_path, asset):
-        """
-        Loads the asset state from the path.
-        """
-        asset_state = torch.load(
-            asset_state_path, map_location=device)
-        asset.load_state_dict(asset_state)
 
     args.cuda = torch.cuda.is_available() \
         and not args.no_cuda
@@ -309,6 +302,8 @@ def main():
     args.distributed = args.local_rank != -1
     args.fp16 = args.fp16 and args.cuda and \
         APEX_INSTALLED
+
+    args.master = args.local_rank in (1, -1)
 
     if args.distributed:
         # use distributed training if local rank is 
@@ -328,10 +323,10 @@ def main():
     # creating tokenizer and fetching vocab size
     tokenizer, specials = load_tokenizer(args)
 
-    # tokenzier must be downloaded
+    # NOTE distributed guard for downloading
     if tokenizer is None:
-        with execute_with_master(args):
-            download_tokenizer(args)
+        execute_with_master(
+            download_tokenizer, args, args)
 
         tokenizer, specials = load_tokenizer(args)
 
@@ -340,67 +335,12 @@ def main():
     # loading config and downloading it is not found
     config = load_config(args)
 
+    # NOTE dsitributed guard
     if config is None:
-        with execute_with_master(args):
-            download_config(args)
+        execute_with_master(
+            download_config, args, args)
 
         config = load_config(args)
-
-    # loading model from checkpoint or from
-    # pretrained weights
-    model_ckpt_path = get_last_checkpoint(
-        model_dir=args.model_dir,
-        pattern=get_save_pattern('model'))
-
-    if model_ckpt_path is not None:
-        config.vocab_size += len(SPECIAL_TOKENS)
-        model = GPT2(config)
-
-    else:
-        with execute_with_master(args):
-            # checking if pretrained weights exists
-            # otherwise they are downloaded
-            download_pretrained(args)
-
-        model_state = load_weights(args.pretrained)
-        model = GPT2(config)
-        model.load_state_dict(model_state, strict=False)
-        # if the training is resumed then the weights
-        # have to be loaded after amp initialization
-
-        model.expand_embeddings(len(SPECIAL_TOKENS))
-        config.vocab_size += len(SPECIAL_TOKENS)
-
-    model = model.to(device)
-    params = model.parameters()
-    optimizer = create_optimizer(args, params)
-
-    optim_ckpt_path = get_last_checkpoint(
-        model_dir=args.model_dir, 
-        pattern=get_save_pattern('optim'))
-
-    # using apex if required and loading its state
-    if args.fp16:
-        model, optimizer = amp.initialize(
-            model, optimizer, opt_level='O2')
-
-        amp_ckpt_path = get_last_checkpoint(
-            model_dir=args.model_dir,
-            pattern=get_save_pattern('amp'))
-
-        if amp_ckpt_path is not None:
-            load_asset(amp_ckpt_path, amp)
-
-    if model_ckpt_path is not None:
-        load_asset(model_ckpt_path, model)
-
-    if optim_ckpt_path is not None:
-        load_asset(optim_ckpt_path, optimizer)
-
-    if args.distributed:
-        model = DistributedDataParallel(
-            model, device_ids=[args.local_rank],
-            output_device=args.local_rank)
 
     args.world_size = int(
         os.environ.get('WORLD_SIZE', 1))
@@ -415,7 +355,7 @@ def main():
         """
         reduced = tensor.clone()
         all_reduce(reduced, op=ReduceOp.SUM)
-        reduced /= world_size
+        reduced /= args.world_size
 
         return reduced
 
@@ -462,13 +402,22 @@ def main():
         metrics = compute_loss(
             outputs[0], targets, specials.PAD)
 
-        return metrics
+        if args.distributed:
+            metrics = [reduce_tensor(t) for t in metrics]
+
+        loss, acc, ppl = metrics
+
+        return {'loss': loss, 'acc': acc, 'ppl': ppl}
 
     def train_step(engine, batch):
         """
         Propagates the inputs forward and updates
         the parameters.
         """
+        nonlocal step
+
+        step += 1
+
         model.train()
 
         results = forward_step(batch)
@@ -480,12 +429,20 @@ def main():
         if args.clip_grad_norm is not None:
             clip_grad_norm(args.clip_grad_norm)
 
-        if engine.state.iteration % \
-                args.grad_accum_steps == 0:
+        # using custom variable `step` here instead
+        # of step from engine state because using latter
+        # caused distributed to deadlock here
+        if step % args.grad_accum_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
 
-        results['loss'] = loss.item()
+        results = {
+            key: value.item() for
+            key, value in results.items()
+        }
+
+        # restoring the averaged loss across steps
+        results['loss'] = loss * args.grad_accum_steps
 
         return results
 
@@ -499,9 +456,11 @@ def main():
         with torch.no_grad():
             results = forward_step(batch)
 
-        results['loss'] = results['loss'].item()
-
-        return results
+        # converting the results map to python floats
+        return {
+            key: value.item() for
+            key, value in results.items()
+        }
 
     def backward(loss):
         """
@@ -535,50 +494,122 @@ def main():
 
     # setting up logging and progress bar
     trainer = SafeEngine(train_step)
-    valid_eval = SafeEngine(eval_step)
+    validator = SafeEngine(eval_step)
+
+    # creating checkpointer object and restore the
+    # previous state of the training if one exists
+
+    checkpoint_path = join(args.model_dir, 'checkpoint')
+
+    if not exists(checkpoint_path):
+        # creating new model checkpoint handler
+        checkpoint = SaveableModelCheckpoint(
+            args.model_dir,
+            args.pretrained,
+            n_saved=5,
+            require_empty=False,
+            save_as_state_dict=True,
+            score_function=score_function,
+            smaller_better=True)
+    else:
+        # it is already present only have to load
+        # the pickled checkpoint object
+        checkpoint = torch.load(checkpoint_path)
+
+    last_ckpt_path = checkpoint.last_checkpoint
+
+    if last_ckpt_path is not None:
+        msg = 'Loading state from {}'
+        print(msg.format(basename(last_ckpt_path)))
+
+        last_state = torch.load(
+            last_ckpt_path, map_location=device)
+
+    # loading model from checkpoint or from
+    # pretrained weights
+    if last_ckpt_path is not None:
+        config.vocab_size += len(SPECIAL_TOKENS)
+        model = GPT2(config)
+
+    else:
+        # NOTE distributed guard
+        execute_with_master(
+            download_pretrained, args, args)
+        # checking if pretrained weights exists
+        # otherwise they are downloaded
+
+        model_state = load_weights(args.pretrained)
+        model = GPT2(config)
+        model.load_state_dict(model_state, strict=False)
+        # if the training is resumed then the weights
+        # have to be loaded after amp initialization
+
+        model.expand_embeddings(len(SPECIAL_TOKENS))
+        config.vocab_size += len(SPECIAL_TOKENS)
+
+    model = model.to(device)
+    params = model.parameters()
+    optimizer = create_optimizer(args, params)
+
+    # using apex if required and loading its state
+    if args.fp16:
+        model, optimizer = amp.initialize(
+            model, optimizer, opt_level='O2')
+
+        if last_ckpt_path is not None and 'amp' \
+                in last_ckpt_path:
+            amp.load_state_dict(last_state['amp'])
+
+    if last_ckpt_path is not None:
+        model.load_state_dict(last_state['model'])
+        optimizer.load_state_dict(last_state['optim'])
+
+    if args.distributed:
+        model = DistributedDataParallel(
+            model, device_ids=[args.local_rank],
+            output_device=args.local_rank)
+
+    checkpoint_dict = {'model': model, 'optim': optimizer}
+
+    if args.fp16:
+        checkpoint_dict['amp'] = amp
+
+    if args.master:
+        validator.add_event_handler(
+            Events.COMPLETED, checkpoint, checkpoint_dict)
 
     metrics = ['loss', 'acc', 'ppl']
 
-    tracked = product([trainer, valid_eval], metrics)
+    tracked = product([trainer, validator], metrics)
     for engine, name in tracked:
         output_transform = partial(get_value, name=name)
 
+        # NOTE setting device value for running average
+        # is mandatory for distributed training
         metric = RunningAverage(
-            output_transform=output_transform, alpha=0.8)
+            output_transform=output_transform,
+            alpha=0.8,
+            device=device)
+
         metric.attach(engine, name)
 
     l_bar = '{desc}[{n_fmt}/{total_fmt}] '
     bar = '{percentage:3.0f}%|{bar}'
     r_bar = '{rate_fmt}{postfix} [{elapsed}<{remaining}]'
 
-    pbar = ProgressBar(bar_format=l_bar + bar + r_bar)
+    # only the master worker will use the progress bar
+    pbar = ProgressBar(
+        bar_format=l_bar + bar + r_bar,
+        disable=not args.master)
+
     pbar.attach(trainer, metric_names=metrics)
-
-    # adding model checkpoint handler
-    checkpoint = ModelCheckpoint(
-        args.model_dir, args.pretrained,
-        n_saved=5,
-        require_empty=False,
-        save_as_state_dict=True,
-        score_function=lambda e: -e.state.metrics['loss'])
-
-    checkpoint_dict = {
-        'model': model,
-        'optim': optimizer
-    }
-
-    if args.fp16:
-        checkpoint_dict['amp'] = amp
-
-    valid_eval.add_event_handler(
-        Events.COMPLETED, checkpoint, checkpoint_dict)
 
     early_stopping = EarlyStopping(
         patience=args.patience,
         score_function=lambda e: -e.state.metrics['loss'],
         trainer=trainer)
 
-    valid_eval.add_event_handler(
+    validator.add_event_handler(
         Events.COMPLETED, early_stopping)
 
     # loading history for training logs
@@ -613,17 +644,27 @@ def main():
             except KeyboardInterrupt:
                 pass
 
-    def run_eval(evaluator, loader, prefix):
+    def run_eval(engine, dataset, prefix):
         """
         Runs evaluation with the given evaluator.
         """
-        evaluator.run(loader)
-        results = evaluator.state.metrics
+        engine.run(dataset)
+        results = engine.state.metrics
 
         return {
             prefix + '_' + metric: results[metric]
             for metric in metrics
         }
+
+    @validator.on(Events.COMPLETED)
+    def save_checkpoint(engine):
+        """
+        Saves the checkpoint object.
+        """
+        # this should be called after model checkpoint
+        # saves the model state to a file
+        if args.master:
+            torch.save(checkpoint, checkpoint_path)
 
     @trainer.on(Events.STARTED)
     def setup_state(engine):
@@ -648,37 +689,42 @@ def main():
         })
 
         results.update(run_eval(
-            valid_eval, valid_dataset, 'valid'))
+            validator, valid_dataset, 'valid'))
 
-        record_history(results)
+        if args.master:
+            record_history(results)
 
-        data = list(zip(*[history[h] for h in headers]))
-        table = tabulate(data, headers, floatfmt='.3f')
+            data = list(zip(*[history[h] for h in headers]))
+            table = tabulate(data, headers, floatfmt='.3f')
 
-        print(table.split('\n')[-1])
+            print(table.split('\n')[-1])
 
-    @trainer.on(Events.EXCEPTION_RAISED)
+    # @trainer.on(Events.EXCEPTION_RAISED)
     def handle_exception(engine, e):
-        if isinstance(e, KeyboardInterrupt) and \
-                engine.state.iteration > 1:
+        if isinstance(e, KeyboardInterrupt) and step > 1:
             engine.terminate()
 
         elif isinstance(e, RuntimeError):
             if 'out of memory' in str(e):
-                pass
+                if args.distributed:
+                    raise e
 
             else:
                 raise e
 
-    print()
-    print(tabulate(vars(args).items(), tablefmt='presto'))
-    print()
+    if args.master:
+        print()
+        print(tabulate(
+            vars(args).items(), tablefmt='presto'))
+        print()
 
-    data = list(zip(*[history[h] for h in headers]))
+        data = list(zip(*[history[h] for h in headers]))
 
-    # printing the initial table headers and 
-    # previous results of the training if resuming
-    print(tabulate(data, headers, floatfmt='.3f'))
+        # printing the initial table headers and 
+        # previous results of the training if resuming
+        print(tabulate(data, headers, floatfmt='.3f'))
+
+    step = 0
 
     trainer.run(train_dataset, args.max_epochs)
 
