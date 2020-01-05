@@ -19,7 +19,6 @@ import torch
 import json
 import os
 import re
-import contextlib
 import requests
 import argparse
 
@@ -29,10 +28,11 @@ import tensorflow as tf
 from termcolor import colored
 from tqdm import tqdm
 
-from ignite._utils import (
-    _to_hours_mins_secs)
-
+from ignite._utils import _to_hours_mins_secs
 from ignite.engine import Engine, Events
+
+from ignite.handlers import (
+    ModelCheckpoint, Checkpoint)
 
 from torch.distributed import barrier
 
@@ -88,19 +88,16 @@ def get_last_checkpoint(model_dir, pattern):
     return files[-1] if len(files) > 0 else None
 
 
-@contextlib.contextmanager
-def execute_with_master(args):
+def execute_with_master(fn, args, *fn_args, **fn_kwargs):
     """
     Context manager for performing code blocks
     with master worker only.
     """
-    try:
-        if args.local_rank in (1, -1):
-            yield
+    if args.local_rank in (1, -1):
+        output = fn(*fn_args, **fn_kwargs)
 
-    finally:
-        if args.distributed:
-            barrier()
+    if args.distributed:
+        barrier()
 
 
 def load_weights(model_name):
@@ -258,7 +255,6 @@ def download_file(dump_path):
             else file_name[:7] + ' ... ' + file_name[-7:]
 
         with tqdm(
-                ncols=100,
                 desc='Downloading {}'.format(
                     colored(
                         display_text, attrs=['bold'])),
@@ -291,6 +287,7 @@ class SafeEngine(Engine):
                     self.state.output = \
                         self._process_function(
                             self, self.state.batch)
+
                 except BaseException as e:
                     self._logger.error(
                         'Current step is terminating '
@@ -317,4 +314,98 @@ class SafeEngine(Engine):
         hours, mins, secs = _to_hours_mins_secs(time_taken)
 
         return hours, mins, secs
+
+
+class Item:
+    """
+    Utility class that replaces the `Checkpoint.Item`
+    to be pickleable.
+    """
+
+    def __init__(self, priority, filename):
+        self.priority = priority
+        self.filename = filename
+
+    def __getitem__(self, idx):
+        if idx == 0:
+            return self.priority
+        elif idx == 1:
+            return self.filename
+        else:
+            raise IndexError('Out of range')
+
+
+class SaveableModelCheckpoint(ModelCheckpoint):
+    """
+    Saveable (pickleable) version of `ModelCheckpoint`.
+    Also handles floating point formatting better.
+    """
+
+    def __init__(self, *args, smaller_better, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.smaller_better = smaller_better
+
+    def __call__(self, engine, to_save):
+        if len(to_save) == 0:
+            raise RuntimeError(
+                'No objects to checkpoint found.')
+
+        self._check_objects(to_save)
+        self.to_save = to_save
+
+        suffix = ''
+        if self.global_step_transform is not None:
+            global_step = self.global_step_transform(
+                engine, engine.last_event_name)
+            suffix = '{}'.format(global_step)
+
+        if self._score_function is not None:
+            priority = self._score_function(engine)
+        else:
+            priority = engine.state.get_event_attrib_value(
+                Events.ITERATION_COMPLETED)
+
+        should_save = len(self._saved) < self._n_saved
+
+        # HACK ugly workaround for the or expression
+        if not should_save:
+            is_better = self._saved[0].priority < priority
+
+            if self.smaller_better:
+                is_better = not is_better
+
+            should_save = is_better
+
+        if should_save:
+            if self._score_name is not None:
+                if len(suffix) > 0:
+                    suffix += '_'
+                suffix = '{}{}={:.3f}'.format(
+                    suffix, self._score_name, priority)
+
+            elif self._score_function is not None:
+                if len(suffix) > 0:
+                    suffix += '_'
+                suffix = '{}{:.3f}'.format(suffix, priority)
+
+            elif len(suffix) == 0:
+                suffix = '{:.3f}'.format(priority)
+
+            checkpoint = self._setup_checkpoint()
+
+            name = 'checkpoint'
+            if len(checkpoint) == 1:
+                for k in checkpoint:
+                    name = k
+                checkpoint = checkpoint[name]
+
+            filename = '{}{}_{}{}'.format(
+                self._fname_prefix, name,
+                suffix, self._ext)
+
+            self.save_handler(checkpoint, filename)
+
+            self._saved.append(Item(priority, filename))
+            self._saved.sort(key=lambda item: item[0])
 

@@ -34,8 +34,7 @@ from multiprocessing import Pool
 
 from os.path import (
     exists, join,
-    dirname, abspath,
-    basename, splitext)
+    dirname, abspath)
 
 
 def setup_data_args(parser):
@@ -81,11 +80,11 @@ def int64_feature(value):
         int64_list=tf.train.Int64List(value=value))
 
 
-def read_file(data_path):
+def read_file(file_name):
     """
     Reads lines from a file.
     """
-    with open(data_path, 'r') as fh:
+    with open(file_name, 'r') as fh:
         for line in fh:
             yield line.strip()
 
@@ -236,17 +235,15 @@ def create_loader(
             tf.io.parse_single_example(
                 example, features=features)
 
-        input_ids = tf.sparse.to_dense(
-                parsed_example['input_ids'])
-
-        type_ids = tf.sparse.to_dense(
-                parsed_example['type_ids'])
-
         parsed_example['input_ids'] = \
-            input_ids[:args.max_size]
+            tf.sparse.to_dense(
+                parsed_example['input_ids']
+            )[:args.max_size]
 
         parsed_example['type_ids'] = \
-            type_ids[:args.max_size]
+            tf.sparse.to_dense(
+                parsed_example['type_ids']
+            )[:args.max_size]
 
         return parsed_example
 
@@ -261,10 +258,8 @@ def create_loader(
         Creates the attention mask tensor and replaces
         1 and 0s in type id tensor with SP ids.
         """
-        attn_mask = tf.equal(
+        example['attn_mask'] = tf.equal(
             example['input_ids'], pad_id)
-
-        example['attn_mask'] = attn_mask
 
         type_ids = tf.dtypes.cast(
             example['type_ids'], tf.bool)
@@ -282,8 +277,7 @@ def create_loader(
 
     if args.distributed:
         dataset = dataset.shard(
-            num_shards=int(
-                os.environ.get('WORLD_SIZE', 1)),
+            num_shards=args.world_size,
             index=args.local_rank)
 
     dataset = dataset.shuffle(1000)
@@ -402,8 +396,8 @@ def create_dataset(args, tokenizer, specials):
         with open(metadata_path, 'w') as fh:
             try:
                 json.dump({
-                    'train': [train_files, train_size],
-                    'valid': [valid_files, valid_size],
+                    'train': train,
+                    'valid': valid,
                 }, fh)
             except KeyboardInterrupt:
                 shutil.rmtree(metadata_path)
@@ -413,10 +407,10 @@ def create_dataset(args, tokenizer, specials):
             metadata_path))
 
         with open(metadata_path, 'r') as fh:
-            filenames = json.load(fh)
+            metadata = json.load(fh)
 
-        train_files, train_size = filenames['train']
-        valid_files, valid_size = filenames['valid']
+        train_files, train_size = metadata['train']
+        valid_files, valid_size = metadata['valid']
 
     with tf.device('cpu'):
         train_dataset = create_loader(
