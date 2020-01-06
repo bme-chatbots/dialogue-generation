@@ -105,7 +105,9 @@ venv.bak/
 
 model/
 data/*
-!data/personachat.py
+!data/prepare_personachat.py
 
 *.html
 *.cpp
+
+.vscode/
