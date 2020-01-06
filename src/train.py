@@ -414,10 +414,6 @@ def main():
         Propagates the inputs forward and updates
         the parameters.
         """
-        nonlocal step
-
-        step += 1
-
         model.train()
 
         results = forward_step(batch)
@@ -429,10 +425,8 @@ def main():
         if args.clip_grad_norm is not None:
             clip_grad_norm(args.clip_grad_norm)
 
-        # using custom variable `step` here instead
-        # of step from engine state because using latter
-        # caused distributed to deadlock here
-        if step % args.grad_accum_steps == 0:
+        if engine.state.iterations % \
+                args.grad_accum_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
 
@@ -468,9 +462,8 @@ def main():
         normal precision mode.
         """
         if args.fp16:
-            with amp.scale_loss(
-                    loss, optimizer) as scaled:
-                scaled.backward()
+            with amp.scale_loss(loss, optimizer) as sc:
+                sc.backward()
         else:
             loss.backward()
 
@@ -699,7 +692,7 @@ def main():
 
             print(table.split('\n')[-1])
 
-    # @trainer.on(Events.EXCEPTION_RAISED)
+    @trainer.on(Events.EXCEPTION_RAISED)
     def handle_exception(engine, e):
         if isinstance(e, KeyboardInterrupt) and step > 1:
             engine.terminate()

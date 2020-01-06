@@ -21,15 +21,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
 
 from tqdm import tqdm
-
-from itertools import (
-    zip_longest, chain)
-
-from absl import app, flags
-from datetime import datetime
-from copy import deepcopy
+from itertools import zip_longest
 from math import ceil
-from collections import defaultdict
 from multiprocessing import Pool
 
 from os.path import (
@@ -142,6 +135,18 @@ def transform_split(
 
     pool = Pool(processes=args.n_workers)
 
+    def create_writer_args(examples, idx):
+        """
+        Helper function to create the arguments
+        for `write_tfrecord` funciton.
+        """
+        return (
+            list(examples),
+            tokenizer,
+            dump_path.format(idx),
+            specials.EOS
+        )
+
     def generate_results():
         """
         Performs serialization and generates
@@ -152,12 +157,10 @@ def transform_split(
             # converting iterators to list so resources
             # are not shared in concurrent workers
             batch = filter(is_not_none, batch)
-            batch = [(
-                list(group),
-                tokenizer,
-                dump_path.format(idx),
-                specials.EOS)
-                for idx, group in batch]
+            batch = [
+                create_writer_args(group, idx)
+                for idx, group in batch
+            ]
 
             loop = tqdm(
                 pool.imap(write_tfrecord, batch),
@@ -167,11 +170,11 @@ def transform_split(
 
             yield from loop
 
-    # generates split sizes and filenames 
+    # generates split sizes and file names 
     # of the tfrecords
-    file_names, sizes = zip(*generate_results())
+    tfrecord_names, sizes = zip(*generate_results())
 
-    return file_names, sum(sizes)
+    return tfrecord_names, sum(sizes)
 
 
 def write_tfrecord(params):
@@ -187,6 +190,10 @@ def write_tfrecord(params):
         """
         input_ids, type_ids = [], []
 
+        # TODO create a version of this function
+        # where SP ids are inserted at the beginning
+        # of the speakers utterance
+
         for idx, utterance in enumerate(dialog):
             ids = tokenizer.encode(utterance)
             ids.append(eos_id)
@@ -195,15 +202,14 @@ def write_tfrecord(params):
             type_ids.extend([idx % 2] * len(ids))
 
         features = {
-            'input_ids': int64_feature(list(input_ids)),
-            'type_ids': int64_feature(list(type_ids))
+            'input_ids': int64_feature(input_ids),
+            'type_ids': int64_feature(type_ids)
         }
 
         return features
 
     with tf.io.TFRecordWriter(file_name) as writer:
         for example in examples:
-
             example = tf.train.Example(
                 features=tf.train.Features(
                     feature=create_feature(
@@ -215,7 +221,8 @@ def write_tfrecord(params):
 
 
 def create_loader(
-        args, filenames, specials, size, shuffle=False):
+        args, tfrecord_paths, specials, size,
+        shuffle=False):
     """
     Creates a generator that iterates through the
     dataset.
@@ -234,6 +241,9 @@ def create_loader(
         parsed_example = \
             tf.io.parse_single_example(
                 example, features=features)
+
+        # TODO check if truncating the sparse tensor
+        # is more efficient
 
         parsed_example['input_ids'] = \
             tf.sparse.to_dense(
@@ -263,7 +273,9 @@ def create_loader(
 
         type_ids = tf.dtypes.cast(
             example['type_ids'], tf.bool)
-
+        
+        # 50-50 case of switching the speaker ids of
+        # the dialog 
         cond = type_ids if \
             tf.random.uniform(shape=(1, )) > 0.5 else \
             ~type_ids
@@ -273,14 +285,16 @@ def create_loader(
 
         return example
 
-    dataset = tf.data.TFRecordDataset(filenames)
+    dataset = tf.data.TFRecordDataset(tfrecord_paths)
 
     if args.distributed:
         dataset = dataset.shard(
             num_shards=args.world_size,
             index=args.local_rank)
+    
+    if shuffle:
+        dataset = dataset.shuffle(1000)
 
-    dataset = dataset.shuffle(1000)
     dataset = dataset.map(
         parse_example,
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -384,8 +398,8 @@ def create_dataset(args, tokenizer, specials):
                 specials=specials)
             for file_names, split_name in splits]
 
-        train_files, train_size = train
-        valid_files, valid_size = valid
+        train_tfrecords, train_size = train
+        valid_tfrecords, valid_size = valid
 
         print('Saving metadata to {}'.format(
             metadata_path))
@@ -409,20 +423,20 @@ def create_dataset(args, tokenizer, specials):
         with open(metadata_path, 'r') as fh:
             metadata = json.load(fh)
 
-        train_files, train_size = metadata['train']
-        valid_files, valid_size = metadata['valid']
+        train_tfrecords, train_size = metadata['train']
+        valid_tfrecords, valid_size = metadata['valid']
 
     with tf.device('cpu'):
         train_dataset = create_loader(
             args=args,
-            filenames=train_files,
+            tfrecord_paths=train_tfrecords,
             size=train_size,
             specials=specials,
             shuffle=True)
 
         valid_dataset = create_loader(
             args=args,
-            filenames=valid_files,
+            tfrecord_paths=valid_tfrecords,
             size=valid_size,
             specials=specials)
 
