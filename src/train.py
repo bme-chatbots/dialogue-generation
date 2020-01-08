@@ -694,7 +694,8 @@ def main():
 
     @trainer.on(Events.EXCEPTION_RAISED)
     def handle_exception(engine, e):
-        if isinstance(e, KeyboardInterrupt) and step > 1:
+        if isinstance(e, KeyboardInterrupt) and \
+                engine.state.iterations > 1:
             engine.terminate()
 
         elif isinstance(e, RuntimeError):
@@ -716,8 +717,6 @@ def main():
         # printing the initial table headers and 
         # previous results of the training if resuming
         print(tabulate(data, headers, floatfmt='.3f'))
-
-    step = 0
 
     trainer.run(train_dataset, args.max_epochs)
 
