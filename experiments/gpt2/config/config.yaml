@@ -1,0 +1,54 @@
+# @package _group_
+
+defaults:
+  - generation: sampling
+
+checkpoint_file: null
+tokenizer_dir: ${data.root}/tokenizer
+
+seed: 42
+
+trainer:
+  gpus: [0]
+  num_nodes: 1
+  min_epochs: 10
+  precision: 32
+
+model:
+  pretrained_name: gpt2
+  warmup_steps: 100
+  lr: 1e-3
+
+generation:
+  # sets the number of previous utterances stored in history
+  history_size: 2
+  max_length: 1000
+  min_length: 3
+  temperature: 0.8
+
+data:
+  # `name` is the predefined dataset which has to be set to empty if using custom dataset
+  name: personachat
+  # `field` is the key in the JSON object for the dialogue in raw data files
+  field: dialogue
+  root: ${hydra:runtime.cwd}/../../data
+  # rebuilds the predefined dataset from scratch
+  rebuild: false
+  # `max_tokens` is the number of tokens that fit into memory during training
+  # note that `batch_size` is computed from this value based on the lengths of the examples
+  # e.g. sequences of length 183 and 251 are packed into a batch as their size is < `max_tokens`
+  max_tokens: 512
+  # `num_buckets` is used for grouping similar length examples
+  # it sets the number of different length groups
+  num_buckets: 8
+  num_workers: 8
+  # `build_dir` is only used for pre-defined datasets where the download scripts 
+  # prepare the datasets given by `name`
+  build_dir: ${data.root}/${data.name}
+  cache_dir: ${data.build_dir}
+
+  train:
+    data_pattern: ${data.build_dir}/train/*.jsonl
+
+  validation:
+    data_pattern: ${data.build_dir}/validation/*.jsonl

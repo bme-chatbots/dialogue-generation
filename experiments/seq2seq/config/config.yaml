@@ -1,0 +1,56 @@
+# @package _group_
+
+defaults:
+  - generation: sampling
+
+checkpoint_file: null
+tokenizer_dir: ${data.root}/tokenizer
+
+seed: 42
+
+trainer:
+  gpus: [0]
+  num_nodes: 1
+  min_epochs: 10
+  precision: 32
+
+model:
+  pretrained_name: gpt2
+  warmup_steps: 100
+  lr: 1e-3
+
+generation:
+  # sets the number of previous utterances stored in history
+  max_length: 1000
+  min_length: 3
+  temperature: 0.8
+  history_size: 2
+
+data:
+  # `name` is the predefined dataset which has to be set to null if using custom dataset
+  name: opendialkg
+  # `field` is the key in the JSON object for the dialogue in raw data files
+  field: dialogue
+  root: ${hydra:runtime.cwd}/../../data
+  # rebuilds the predefined dataset from scratch
+  rebuild: false
+  # `*_max_tokens` is the number of tokens that fit into memory during training note that
+  # `batch_size` is dynamically calculated based on the `src_max_tokens` and the length of 
+  # each dialogue source example
+  max_input_tokens: 512
+  max_label_tokens: 128
+  history_size: 2
+  # `num_buckets` is used for grouping similar length examples it sets the number of
+  # different length groups
+  num_buckets: 8
+  num_workers: 8
+  # `build_dir` this is only used for pre-defined datasets where the download scripts 
+  # preprocess the datasets given by `name`
+  build_dir: ${data.root}/${data.name}
+  cache_dir: ${data.root}/${data.name}
+
+  train:
+    data_pattern: ${data.build_dir}/seq2seq/train/*.jsonl
+
+  validation:
+    data_pattern: ${data.build_dir}/seq2seq/validation/*.jsonl
