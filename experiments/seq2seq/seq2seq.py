@@ -16,13 +16,13 @@ import itertools
 import datasets
 import functools
 import importlib
-import modeling
 
 import pytorch_lightning as pl
 import numpy as np
 
-PROJECT_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), "..", "..")
-EXPERIMENT_DIR = os.path.join(PROJECT_DIR, "experiments", "seq2seq")
+
+EXPERIMENT_DIR = os.path.abspath(os.path.dirname(__file__))
+PROJECT_DIR = os.path.join(EXPERIMENT_DIR, "..", "..")
 
 # this implementation uses the token_type_id field of the gpt2 transformer
 # for signaling the source of the current utterance
@@ -40,7 +40,7 @@ SPECIAL_TOKENS = [EOS, PAD, SOS, BOT, USR]
 SPLITS = TRAIN, VALID = datasets.Split.TRAIN, datasets.Split.VALIDATION
 
 INPUT_TEXT, LABEL_TEXT = "input_text", "label_text"
-INPUT_IDS, INPUT_TYPES, LABELS = "input_ids", "input_types", "labels"
+INPUT_IDS, SPEAKER_IDS, LABELS = "input_ids", "speaker_ids", "labels"
 ATTENTION_MASK = "attention_mask"
 
 COLUMNS = [INPUT_IDS, LABELS, INPUT_TYPES, ATTENTION_MASK]
@@ -59,15 +59,12 @@ class Seq2SeqModule(pl.LightningModule):
 
         self.hparams = hparams
 
-        decoder = transformers.GPT2LMHeadModel.from_pretrained(
-            self.hparams.pretrained_name
+        self.model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained(
+            self.hparams.encoder_pretrained_name, self.hparams.decoder_pretrained_name
         )
 
-        decoder.resize_token_embeddings(self.hparams.vocab_size)
-
-        encoder = modeling.TransformerEncoder()
-
-        self.model = transformer.EncoderDecoder(encoder, decoder)
+        self.model.get_encoder.resize_token_embeddings(self.hparams.vocab_size)
+        self.model.get_decoder.resize_token_embeddings(
 
     def forward(self, batch):
         output = self.model(

@@ -50,6 +50,7 @@ def main(config: omegaconf.OmegaConf):
     data_module = seq2seq.Seq2SeqDataModule(config.data, tokenizer)
     data_module.prepare_data()
     data_module.setup()
+
     for batch in data_module.train_dataloader():
         print(batch)
 
