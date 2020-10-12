@@ -30,7 +30,15 @@ def main(config: omegaconf.OmegaConf):
         pl.trainer.seed_everything(config.seed)
 
     try:
-        tokenizer = transformers.GPT2TokenizerFast.from_pretrained(config.tokenizer_dir)
+        encoder_tokenizer = load_tokenizer(
+            config.encoder_pretrained_name, config.encoder_tokenizer_dir
+        )
+
+    try:
+        encoder_tokenizer = transformers.GPT2TokenizerFast.from_pretrained(
+            config.encoder_tokenizer_dir
+        )
+
         logging.info(f"Loading existing tokenizer from {config.tokenizer_dir}")
 
     except OSError:

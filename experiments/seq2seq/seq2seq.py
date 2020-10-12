@@ -26,8 +26,8 @@ PROJECT_DIR = os.path.join(EXPERIMENT_DIR, "..", "..")
 
 # this implementation uses the token_type_id field of the gpt2 transformer
 # for signaling the source of the current utterance
-BOT = "<|bot|>"
-USR = "<|user|>"
+SPEAKER_FROM = "<|speaker_from|>"
+SPEAKER_TO = "<|speaker_to|>"
 
 # other than the native eos_id the dialogue model uses sos_id and pad_id
 # as special control
@@ -35,11 +35,12 @@ EOS = "<|endoftext|>"
 SOS = "<|startoftext|>"
 PAD = "<|padding|>"
 
-SPECIAL_TOKENS = [EOS, PAD, SOS, BOT, USR]
+ENCODER, DECODER = "encoder", "decoder"
+
+SPECIAL_TOKENS = [EOS, SOS, PAD, SPEAKER_FROM, SPEAKER_TO]
 
 SPLITS = TRAIN, VALID = datasets.Split.TRAIN, datasets.Split.VALIDATION
 
-INPUT_TEXT, LABEL_TEXT = "input_text", "label_text"
 INPUT_IDS, SPEAKER_IDS, LABELS = "input_ids", "speaker_ids", "labels"
 ATTENTION_MASK = "attention_mask"
 
@@ -64,7 +65,7 @@ class Seq2SeqModule(pl.LightningModule):
         )
 
         self.model.get_encoder.resize_token_embeddings(self.hparams.vocab_size)
-        self.model.get_decoder.resize_token_embeddings(
+        # self.model.get_decoder.resize_token_embeddings(
 
     def forward(self, batch):
         output = self.model(
@@ -124,15 +125,20 @@ class Seq2SeqModule(pl.LightningModule):
 
 
 class Seq2SeqDataModule(pl.LightningDataModule):
-    def __init__(self, config, tokenizer):
+    def __init__(self, config, encoder_tokenizer, decoder_tokenizer):
         super().__init__()
 
         self.config = config
-        self.tokenizer = tokenizer
+
+        self.tokenizers = {ENCODER: encoder_tokenizer, DECODER: decoder_tokenizer}
         self.dataset = None
 
-        special_tokens = [PAD, BOT, USR]
-        self.specials = self.tokenizer.convert_tokens_to_ids(special_tokens)
+        special_tokens = [PAD, SPEAKER_FROM, SPEAKER_TO]
+
+        self.specials = {
+            ENCODER: encoder_tokenizer.convert_tokens_to_ids(special_tokens),
+            DECODER: decoder_tokenizer.convert_tokens_to_ids(special_tokens),
+        }
 
     def prepare_data(self):
         project_scripts_dir = os.path.join(PROJECT_DIR, "scripts")
@@ -158,10 +164,10 @@ class Seq2SeqDataModule(pl.LightningDataModule):
             os.system(f"python {prepare_script} {' '.join(params)}")
 
         # instantiating dataset for building the cache file on a single worker
-        build_dataset(self.tokenizer, self.config)
+        build_dataset(self.tokenizers, self.config)
 
     def setup(self, stage=None):
-        self.dataset = build_dataset(self.tokenizer, self.config)
+        self.dataset = build_dataset(self.tokenizers, self.config)
 
     def train_dataloader(self):
         return build_dataloader(self.dataset[TRAIN], self.config, self.specials)
@@ -222,107 +228,23 @@ def build_dataloader(dataset, config, specials, shuffle=True):
         dataset["examples"],
         pin_memory=True,
         num_workers=config.num_workers,
-        collate_fn=functools.partial(collate, specials=specials),
+        collate_fn=functools.partial(
+            collate,
+            encoder_specials=specials[ENCODER],
+            decoder_specials=specials[DECODER],
+        ),
         batch_sampler=bucket_sampler,
     )
 
 
-def build_examples(dialogues, history_size, input_field):
-    examples = itertools.chain(
-        *(
-            list(generate_examples(dialogue, history_size))
-            for dialogue in dialogues[input_field]
-        )
-    )
+def build_tokenizer(pretrained_name, tokenizer_dir):
+    config = transformers.AutoConfig.from_pretrained(pretrained_name)
+    tokenizer = transformer.AutoTokenizerFast.from_pretrained(tokenizer_dir, config=config)    
 
-    inputs, input_types, labels = zip(*examples)
-
-    return {
-        INPUT_TEXT: list(inputs),
-        INPUT_TYPES: list(input_types),
-        LABEL_TEXT: list(labels),
-    }
+    return tokenizer
 
 
-def generate_examples(dialogue, history_size):
-    # each dialogue is separated into slices with src size of history_size + 1 and
-    # a target which is the upcoming utterance in the dialogue
-    def generate_slices():
-        for to_idx in range(2, len(dialogue) + 1):
-            for from_idx in range(max(to_idx - history_size - 2, 0), to_idx - 1):
-                yield dialogue[from_idx:to_idx]
-
-    for example in generate_slices():
-        inputs, labels = example[:-1], SOS + example[-1] + EOS
-        # 0 value always marks the last utterance of the partner in the dialogue
-        input_types = [
-            [idx % 2] * len(utterance) for idx, utterance in enumerate(reversed(inputs))
-        ][::-1]
-
-        yield inputs, input_types, labels
-
-
-def encode_examples(example, tokenizer, max_input_tokens, max_label_tokens):
-    model_inputs = tokenizer(
-        example[INPUT_TEXT],
-        return_tensors="np",
-        max_length=max_input_tokens,
-        truncation=True,
-    )
-
-    labels_and_decoder_mask = tokenizer(
-        example[LABEL_TEXT],
-        return_tensors="np",
-        truncation=True,
-    )
-
-    labels = labels_and_decoder_mask["input_ids"]
-
-    model_inputs["labels"] = labels
-
-    return model_inputs
-
-
-def build_split(
-    examples,
-    tokenizer,
-    max_input_tokens,
-    max_label_tokens,
-    cache_dir,
-    split_name,
-    history_size,
-    field,
-):
-    examples = examples.map(
-        functools.partial(build_examples, history_size=history_size, input_field=field),
-        batched=True,
-        remove_columns=examples.column_names,
-        cache_file_name=os.path.join(cache_dir, f"{split_name}.raw.cache"),
-    )
-
-    examples = examples.map(
-        lambda example: encode_examples(
-            example,
-            tokenizer,
-            max_input_tokens,
-            max_label_tokens,
-        ),
-        remove_columns=[INPUT_TEXT, LABEL_TEXT],
-        cache_file_name=os.path.join(cache_dir, f"{split_name}.examples.cache"),
-    )
-
-    examples.set_format(type="np", columns=COLUMNS)
-
-    lengths = examples.map(
-        lambda example: {"length": example[INPUT_IDS][0].size},
-        remove_columns=examples.column_names,
-        cache_file_name=os.path.join(cache_dir, f"{split_name}.lengths.cache"),
-    )
-
-    return {"examples": examples, "lengths": lengths}
-
-
-def build_dataset(tokenizer, config):
+def build_dataset(tokenizers, config):
     data_files = {
         str(split): glob.glob(config.get(str(split)).data_pattern) for split in SPLITS
     }
@@ -333,20 +255,85 @@ def build_dataset(tokenizer, config):
     # contains the dataset with the inputs and `lengths` contains the size of each
     # example which is used by the batch sampler
     splits = {
-        split: build_split(
-            examples=examples,
-            tokenizer=tokenizer,
-            max_input_tokens=config.max_input_tokens,
-            max_label_tokens=config.max_label_tokens,
-            cache_dir=config.cache_dir,
-            split_name=split,
-            history_size=config.history_size,
-            field=config.field,
-        )
-        for split, examples in dataset.items()
+        split: build_split(examples, tokenizers, split_name, config)
+        for split_name, examples in dataset.items()
     }
 
     return splits
+
+
+def build_split(examples, tokenizers, split_name, config):
+    examples = examples.map(
+        lambda example: build_examples(example, tokenizers, config),
+        batched=True,
+        remove_columns=[config.field],
+        cache_file_name=os.path.join(
+            config.cache_dir, f"{split_name}.examples.cache"
+        ),
+    )
+
+    examples.set_format(type="np", columns=COLUMNS)
+
+    for example in examples:
+        print(example)
+
+    lengths = examples.map(
+        lambda example: {"length": example[INPUT_IDS][0].size},
+        remove_columns=examples.column_names,
+        cache_file_name=os.path.join(
+            config.cache_dir, f"{split_name}.lengths.cache"
+        ),
+    )
+
+    return {"examples": examples, "lengths": lengths}
+
+
+def build_examples(examples, tokenizers, config):
+    def generate_examples():
+        for example in examples:
+            dialogue = example[config.field]
+
+            for idx in range(2, len(dialogue) + 1):
+                yield build_example(dialogue[:idx], dialogue[idx], tokenizers, config)
+
+    input_ids, speaker_ids, labels = zip(*generate_examples())
+
+    return {
+        INPUT_IDS: list(itertools.chain(*input_ids)),
+        SPEAKER_IDS: list(itertools.chain(*speaker_ids)),
+        LABELS: list(itertools.chain(*labels)),
+    }
+
+
+def build_example(input_text, label_text, tokenizers, config):
+    input_text = [
+        get_speaker_token(idx) + utterance
+        for idx, utterance in enumerate(reversed(input_text))
+    ]
+
+    example = tokenizers[ENCODER](input_text)
+
+    speaker_tokens = [
+        [get_speaker_token(idx)] * len(utterance)
+        for idx, utterance in example[INPUT_IDS]
+    ]
+
+    example[SPEAKER_IDS] = tokenizers[ENCODER](speaker_tokens)[INPUT_IDS]
+
+    example = {
+        key: list(itertools.chain(*value))[-config.max_input_tokens:]
+        for key, value in example.items()
+    }
+
+    labels_and_decoder_mask = tokenizer[DECODER](SOS + label_text + EOS)
+    labels = labels_and_decoder_mask[INPUT_IDS][:config.max_label_tokens]
+
+    return example[INPUT_IDS], example[SPEAKER_IDS], labels
+
+
+def get_speaker_token(idx):
+    # if the idx is even then SPEAKER_TO id is assigned to the idx
+    return SKEAKER_TO if idx % 2 else SPEAKER_FROM
 
 
 def partition(lengths, max_tokens, num_buckets):
@@ -390,4 +377,3 @@ def collate(batch, specials):
         LABEL_IDS: label_ids,
         ATTENTION_MASK: torch.as_tensor(attention_mask, dtype=torch.bool),
     }
-
