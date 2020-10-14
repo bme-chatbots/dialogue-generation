@@ -15,7 +15,8 @@ import transformers
 import itertools
 import datasets
 import functools
-import importlib
+import logging
+import dataclasses
 
 import pytorch_lightning as pl
 import numpy as np
@@ -37,14 +38,11 @@ PAD = "<|padding|>"
 
 ENCODER, DECODER = "encoder", "decoder"
 
-SPECIAL_TOKENS = [EOS, SOS, PAD, SPEAKER_FROM, SPEAKER_TO]
-
 SPLITS = TRAIN, VALID = datasets.Split.TRAIN, datasets.Split.VALIDATION
 
 INPUT_IDS, SPEAKER_IDS, LABELS = "input_ids", "speaker_ids", "labels"
+INPUT_MASK, LABEL_MASK = "input_mask", "label_mask"
 ATTENTION_MASK = "attention_mask"
-
-COLUMNS = [INPUT_IDS, LABELS, INPUT_TYPES, ATTENTION_MASK]
 
 
 # custom modelcheckpoint is required to overwrite the formatting in the file name
@@ -129,15 +127,12 @@ class Seq2SeqDataModule(pl.LightningDataModule):
         super().__init__()
 
         self.config = config
-
-        self.tokenizers = {ENCODER: encoder_tokenizer, DECODER: decoder_tokenizer}
+        self.tokenizer = {ENCODER: encoder_tokenizer, DECODER: decoder_tokenizer}
         self.dataset = None
 
-        special_tokens = [PAD, SPEAKER_FROM, SPEAKER_TO]
-
-        self.specials = {
-            ENCODER: encoder_tokenizer.convert_tokens_to_ids(special_tokens),
-            DECODER: decoder_tokenizer.convert_tokens_to_ids(special_tokens),
+        self.pad_id = {
+            ENCODER: encoder_tokenizer.convert_tokens_to_ids(PAD),
+            DECODER: decoder_tokenizer.convert_tokens_to_ids(PAD),
         }
 
     def prepare_data(self):
@@ -164,16 +159,16 @@ class Seq2SeqDataModule(pl.LightningDataModule):
             os.system(f"python {prepare_script} {' '.join(params)}")
 
         # instantiating dataset for building the cache file on a single worker
-        build_dataset(self.tokenizers, self.config)
+        build_dataset(self.tokenizer, self.config)
 
     def setup(self, stage=None):
-        self.dataset = build_dataset(self.tokenizers, self.config)
+        self.dataset = build_dataset(self.tokenizer, self.config)
 
     def train_dataloader(self):
-        return build_dataloader(self.dataset[TRAIN], self.config, self.specials)
+        return build_dataloader(self.dataset[TRAIN], self.config, self.pad_id)
 
     def val_dataloader(self):
-        return build_dataloader(self.dataset[VALID], self.config, self.specials, False)
+        return build_dataloader(self.dataset[VALID], self.config, self.pad_id, False)
 
 
 class BucketSampler(torch.utils.data.Sampler):
@@ -216,7 +211,7 @@ class BucketSampler(torch.utils.data.Sampler):
         return self.length
 
 
-def build_dataloader(dataset, config, specials, shuffle=True):
+def build_dataloader(dataset, config, pad_id, shuffle=True):
     bucket_sampler = BucketSampler(
         dataset["lengths"]["length"],
         config.max_input_tokens,
@@ -228,23 +223,57 @@ def build_dataloader(dataset, config, specials, shuffle=True):
         dataset["examples"],
         pin_memory=True,
         num_workers=config.num_workers,
-        collate_fn=functools.partial(
-            collate,
-            encoder_specials=specials[ENCODER],
-            decoder_specials=specials[DECODER],
-        ),
+        collate_fn=functools.partial(collate, pad_id=pad_id),
         batch_sampler=bucket_sampler,
     )
 
 
-def build_tokenizer(pretrained_name, tokenizer_dir):
-    config = transformers.AutoConfig.from_pretrained(pretrained_name)
-    tokenizer = transformer.AutoTokenizerFast.from_pretrained(tokenizer_dir, config=config)    
+def load_or_build_tokenizer(config, additional_tokens=None, special_tokens=None):
+    try:
+        tokenizer = load_tokenizer(config.pretrained_name, config.tokenizer_dir)
+
+    except OSError:
+        # tokenizer does not exist in the given path thereby creating it there
+        logging.info(f"Tokenizer not found in {config.tokenizer_dir}")
+        tokenizer = build_tokenizer(
+            config.pretrained_name,
+            config.tokenizer_dir,
+            additional_tokens,
+            special_tokens,
+        )
 
     return tokenizer
 
 
-def build_dataset(tokenizers, config):
+def load_tokenizer(pretrained_name, tokenizer_dir):
+    config = transformers.AutoConfig.from_pretrained(pretrained_name)
+
+    # there is an issue about loading a tokenizer from local directory with the
+    # AutoModel class as it requires the configuration file to identify the model
+    # https://github.com/huggingface/transformers/issues/4197
+    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_dir, config=config)
+
+    return tokenizer
+
+
+def build_tokenizer(
+    pretrained_name, tokenizer_dir, additional_tokens=None, special_tokens=None
+):
+    tokenizer = transformers.AutoTokenizer.from_pretrained(pretrained_name)
+    if special_tokens is not None:
+        tokenizer.add_special_tokens(special_tokens)
+
+    if additional_tokens is not None:
+        tokenizer.add_tokens(additional_tokens, special_tokens=True)
+
+    tokenizer.save_pretrained(tokenizer_dir)
+
+    logging.info(f"Saving tokenizer to {tokenizer_dir}")
+
+    return tokenizer
+
+
+def build_dataset(tokenizer, config):
     data_files = {
         str(split): glob.glob(config.get(str(split)).data_pattern) for split in SPLITS
     }
@@ -255,85 +284,88 @@ def build_dataset(tokenizers, config):
     # contains the dataset with the inputs and `lengths` contains the size of each
     # example which is used by the batch sampler
     splits = {
-        split: build_split(examples, tokenizers, split_name, config)
+        str(split_name): build_split(examples, tokenizer, str(split_name), config)
         for split_name, examples in dataset.items()
     }
 
     return splits
 
 
-def build_split(examples, tokenizers, split_name, config):
+def build_split(examples, tokenizer, split_name, config):
     examples = examples.map(
-        lambda example: build_examples(example, tokenizers, config),
+        lambda example: build_examples(example, tokenizer, config),
         batched=True,
         remove_columns=[config.field],
-        cache_file_name=os.path.join(
-            config.cache_dir, f"{split_name}.examples.cache"
-        ),
+        cache_file_name=os.path.join(config.cache_dir, f"{split_name}.examples.cache"),
     )
 
-    examples.set_format(type="np", columns=COLUMNS)
-
-    for example in examples:
-        print(example)
+    examples.set_format(type="np", columns=examples.column_names)
 
     lengths = examples.map(
-        lambda example: {"length": example[INPUT_IDS][0].size},
+        lambda example: {"length": example[INPUT_IDS].size},
         remove_columns=examples.column_names,
-        cache_file_name=os.path.join(
-            config.cache_dir, f"{split_name}.lengths.cache"
-        ),
+        cache_file_name=os.path.join(config.cache_dir, f"{split_name}.lengths.cache"),
     )
 
     return {"examples": examples, "lengths": lengths}
 
 
-def build_examples(examples, tokenizers, config):
+def build_examples(examples, tokenizer, config):
     def generate_examples():
-        for example in examples:
-            dialogue = example[config.field]
+        for dialogue in examples[config.field]:
+            assert len(dialogue) > 1
 
-            for idx in range(2, len(dialogue) + 1):
-                yield build_example(dialogue[:idx], dialogue[idx], tokenizers, config)
+            for idx in range(2, len(dialogue)):
+                yield build_example(dialogue[:idx], dialogue[idx], tokenizer, config)
 
-    input_ids, speaker_ids, labels = zip(*generate_examples())
+    input_ids, speaker_ids, input_mask, labels, label_mask = zip(*generate_examples())
 
     return {
-        INPUT_IDS: list(itertools.chain(*input_ids)),
-        SPEAKER_IDS: list(itertools.chain(*speaker_ids)),
-        LABELS: list(itertools.chain(*labels)),
+        INPUT_IDS: list(input_ids),
+        SPEAKER_IDS: list(speaker_ids),
+        INPUT_MASK: list(input_mask),
+        LABELS: list(labels),
+        LABEL_MASK: list(label_mask),
     }
 
 
-def build_example(input_text, label_text, tokenizers, config):
+def build_example(input_text, label_text, tokenizer, config):
     input_text = [
         get_speaker_token(idx) + utterance
         for idx, utterance in enumerate(reversed(input_text))
     ]
 
-    example = tokenizers[ENCODER](input_text)
+    example = tokenizer[ENCODER](input_text, add_special_tokens=False)
 
     speaker_tokens = [
-        [get_speaker_token(idx)] * len(utterance)
-        for idx, utterance in example[INPUT_IDS]
+        "".join([get_speaker_token(idx)] * len(utterance))
+        for idx, utterance in enumerate(example[INPUT_IDS])
     ]
 
-    example[SPEAKER_IDS] = tokenizers[ENCODER](speaker_tokens)[INPUT_IDS]
+    speaker_dict = tokenizer[ENCODER](speaker_tokens, add_special_tokens=False)
+    example[SPEAKER_IDS] = speaker_dict[INPUT_IDS]
 
     example = {
-        key: list(itertools.chain(*value))[-config.max_input_tokens:]
+        key: list(itertools.chain(*value))[-config.max_input_tokens :]
         for key, value in example.items()
     }
 
-    labels_and_decoder_mask = tokenizer[DECODER](SOS + label_text + EOS)
-    labels = labels_and_decoder_mask[INPUT_IDS][:config.max_label_tokens]
+    label_dict = tokenizer[DECODER](SOS + label_text + EOS, add_special_tokens=False)
+    labels = label_dict[INPUT_IDS][: config.max_label_tokens]
+    label_mask = label_dict[ATTENTION_MASK][: config.max_label_tokens]
 
-    return example[INPUT_IDS], example[SPEAKER_IDS], labels
+    return (
+        example[INPUT_IDS],
+        example[SPEAKER_IDS],
+        example[ATTENTION_MASK],
+        labels,
+        label_mask,
+    )
 
 
 def get_speaker_token(idx):
     # if the idx is even then SPEAKER_TO id is assigned to the idx
-    return SKEAKER_TO if idx % 2 else SPEAKER_FROM
+    return SPEAKER_TO if idx % 2 else SPEAKER_FROM
 
 
 def partition(lengths, max_tokens, num_buckets):
@@ -352,28 +384,32 @@ def partition(lengths, max_tokens, num_buckets):
     return partitions
 
 
-def collate(batch, specials):
-    pad_id, bot_id, usr_id = specials
-
+def collate(batch, pad_id):
     batch_size = len(batch)
-    max_len = max([e[INPUT_IDS][0].shape[0] for e in batch]) - 1
+    max_input_len = max([e[INPUT_IDS].shape[0] for e in batch])
+    max_label_len = max([e[LABELS].shape[0] for e in batch])
 
-    input_ids = np.full((batch_size, max_len), pad_id, dtype=np.int64)
-    label_ids = np.copy(input_ids)
-    attention_mask = np.zeros_like(input_ids, dtype=np.int8)
+    input_ids = np.full((batch_size, max_input_len), pad_id[ENCODER], dtype=np.int64)
+    speaker_ids = np.copy(input_ids)
+    input_mask = np.zeros_like(input_ids, dtype=np.int8)
+
+    labels = np.full((batch_size, max_label_len), pad_id[DECODER], dtype=np.int64)
+    label_mask = np.zeros_like(labels, dtype=np.int8)
 
     for idx, example in enumerate(batch):
-        example_len = example[INPUT_IDS][0].shape[0] - 1
-        input_ids[idx, :example_len] = example[INPUT_IDS][0][:-1]
-        attention_mask[idx, :example_len] = example[ATTENTION_MASK][0][:-1]
+        input_len = example[INPUT_IDS].shape[0]
+        input_ids[idx, :input_len] = example[INPUT_IDS]
+        speaker_ids[idx, :input_len] = example[SPEAKER_IDS]
+        input_mask[idx, :input_len] = example[INPUT_MASK]
 
-        label_ids[idx, :example_len] = example[INPUT_IDS][0][1:]
-
-    label_ids = torch.as_tensor(label_ids)
-    label_ids[(label_ids == bot_id) | (label_ids == usr_id)] = pad_id
+        label_len = example[LABELS].shape[0]
+        labels[idx, :label_len] = example[LABELS]
+        label_mask[idx, :label_len] = example[LABEL_MASK]
 
     return {
         INPUT_IDS: torch.as_tensor(input_ids),
-        LABEL_IDS: label_ids,
-        ATTENTION_MASK: torch.as_tensor(attention_mask, dtype=torch.bool),
+        SPEAKER_IDS: torch.as_tensor(speaker_ids),
+        INPUT_MASK: torch.as_tensor(input_mask, dtype=torch.bool),
+        LABELS: torch.as_tensor(labels),
+        LABEL_MASK: torch.as_tensor(label_mask, dtype=torch.bool),
     }

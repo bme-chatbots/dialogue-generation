@@ -11,9 +11,11 @@ import torch
 import hydra
 import logging
 import typing
+import tqdm
 import argparse
 import omegaconf
 import transformers
+import dataclasses
 import seq2seq
 
 import pytorch_lightning as pl
@@ -29,38 +31,13 @@ def main(config: omegaconf.OmegaConf):
     if config.seed is not None:
         pl.trainer.seed_everything(config.seed)
 
-    try:
-        encoder_tokenizer = load_tokenizer(
-            config.encoder_pretrained_name, config.encoder_tokenizer_dir
-        )
+    speaker_tokens = [seq2seq.SPEAKER_FROM, seq2seq.SPEAKER_TO]
 
-    try:
-        encoder_tokenizer = transformers.GPT2TokenizerFast.from_pretrained(
-            config.encoder_tokenizer_dir
-        )
+    encoder_tokenizer = seq2seq.load_or_build_tokenizer(config.encoder, speaker_tokens)
 
-        logging.info(f"Loading existing tokenizer from {config.tokenizer_dir}")
-
-    except OSError:
-        logging.info(f"Tokenizer not found in {config.tokenizer_dir}")
-
-        tokenizer = transformers.GPT2TokenizerFast.from_pretrained(
-            config.model.pretrained_name
-        )
-
-        tokenizer.add_special_tokens({"pad_token": seq2seq.PAD})
-        tokenizer.add_tokens(seq2seq.SPECIAL_TOKENS[2:], special_tokens=True)
-
-        os.makedirs(config.tokenizer_dir, exist_ok=True)
-        tokenizer.save_pretrained(config.tokenizer_dir)
-        logging.info(f"Tokenizer saved to {config.tokenizer_dir}")
-
-    data_module = seq2seq.Seq2SeqDataModule(config.data, tokenizer)
-    data_module.prepare_data()
-    data_module.setup()
-
-    for batch in data_module.train_dataloader():
-        print(batch)
+    decoder_tokenizer = seq2seq.load_or_build_tokenizer(
+        config.decoder, [seq2seq.SPEAKER_FROM, seq2seq.SOS], {"pad_token": seq2seq.PAD}
+    )
 
     if config.checkpoint_file is not None:
         trainer = pl.Trainer(
@@ -74,8 +51,12 @@ def main(config: omegaconf.OmegaConf):
     else:
         omegaconf.OmegaConf.set_struct(config, False)
 
-        config.model.vocab_size = len(tokenizer)
-        config.model.pad_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+        config.model.encoder.vocab_size = len(encoder_tokenizer)
+        config.model.decoder.vocab_size = len(decoder_tokenizer)
+
+        config.model.pad_id = decoder_tokenizer.convert_tokens_to_ids(
+            decoder_tokenizer.pad_token
+        )
 
         model = seq2seq.Seq2SeqModule(argparse.Namespace(**config.model))
 

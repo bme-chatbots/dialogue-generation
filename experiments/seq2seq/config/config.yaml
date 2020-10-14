@@ -1,13 +1,9 @@
 # @package _group_
 
 defaults:
-  - encoder: bert
-  - decoder: gpt2
   - generation: sampling
 
 checkpoint_file: null
-encoder_tokenizer_dir: ${data.root}/encoder_tokenizer
-decoder_tokenizer_dir: ${data.root}/decoder_tokenizer
 
 seed: 42
 
@@ -18,10 +14,16 @@ trainer:
   precision: 32
 
 model:
-  encoder_pretrained_name: bert-base-cased
-  decoder_pretrained_name: gpt2
   warmup_steps: 100
   lr: 1e-3
+
+encoder:
+  tokenizer_dir: ${data.root}/tokenizers/encoder/${encoder.pretrained_name}
+  pretrained_name: bert-base-cased
+
+decoder:
+  tokenizer_dir: ${data.root}/tokenizers/decoder/${decoder.pretrained_name}
+  pretrained_name: gpt2
 
 generation:
   # sets the number of previous utterances stored in history
