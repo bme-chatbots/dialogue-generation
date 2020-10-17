@@ -24,16 +24,16 @@ pl._logger.handlers = []
 
 # identical to the function in gpt2.DialogDataModule.build_dataset but ensures
 # that the final utterance is encoded with the USR token
-def prepare_dialogue(inputs: typing.List[str]) -> str:
+def prepare_dialogue(inputs):
     input_text = "".join(
         [
-            (gpt2.BOT if i % 2 else gpt2.USR) + u + gpt2.EOS
-            for i, u in enumerate(inputs[::-1])
+            (gpt2.SPEAKER_FROM if idx % 2 else gpt2.SPEAKER_TO) + utterance + gpt2.EOS
+            for idx, utterance in enumerate(inputs[::-1])
         ][::-1]
     )
 
     # adding starting bot token to the ids
-    return input_text + gpt2.BOT
+    return input_text + gpt2.SPEAKER_FROM
 
 
 @hydra.main(config_path="config", config_name="config")
@@ -47,11 +47,9 @@ def main(config: omegaconf.OmegaConf):
 
     tokenizer = transformers.GPT2TokenizerFast.from_pretrained(config.tokenizer_dir)
 
-    special_tokens = [tokenizer.pad_token, gpt2.BOT, gpt2.USR]
-    special_token_ids = tokenizer.convert_tokens_to_ids(special_tokens)
-
-    pad_token_id, *role_token_ids = special_token_ids
-    role_token_ids = [[token_id] for token_id in role_token_ids]
+    speaker_tokens = [gpt2.SPEAKER_FROM, gpt2.SPEAKER_TO]
+    speaker_token_ids = tokenizer.convert_tokens_to_ids(speaker_tokens)
+    speaker_token_ids = [[token_id] for token_id in speaker_token_ids]
 
     lightning_model = gpt2.GPT2Module.load_from_checkpoint(config.checkpoint_file)
 
@@ -66,8 +64,7 @@ def main(config: omegaconf.OmegaConf):
         response_ids = lightning_model.model.generate(
             input_ids,
             **config.generation,
-            pad_token_id=pad_token_id,
-            bad_words_ids=role_token_ids,
+            bad_words_ids=speaker_token_ids,
         )
 
         output_ids = response_ids[0].tolist()[input_ids.size(-1) :]
