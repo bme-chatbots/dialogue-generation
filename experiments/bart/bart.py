@@ -30,12 +30,6 @@ PROJECT_DIR = os.path.join(EXPERIMENT_DIR, "..", "..")
 SPEAKER_FROM = "<|speaker_from|>"
 SPEAKER_TO = "<|speaker_to|>"
 
-# other than the native eos_id the dialogue model uses sos_id and pad_id
-# as special control
-EOS = "<|endoftext|>"
-SOS = "<|startoftext|>"
-PAD = "<|padding|>"
-
 SPLITS = TRAIN, VALID = datasets.Split.TRAIN, datasets.Split.VALIDATION
 
 INPUT_IDS = "input_ids"
