@@ -40,7 +40,7 @@ def prepare_dialogue(inputs):
 def main(config: omegaconf.OmegaConf):
     assert config.checkpoint_file is not None
 
-    logging.info("\n" + omegaconf.OmegaConf.to_yaml(config, resolve=True))
+    logging.info("\n" + omegaconf.OmegaConf.to_yaml(config))
 
     if config.seed is not None:
         pl.trainer.seed_everything(config.seed)

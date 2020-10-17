@@ -319,12 +319,12 @@ def collate(examples):
     max_input_len = max([e[INPUT_IDS].shape[0] for e in examples])
     max_label_len = max([e[DECODER_INPUT_IDS].shape[0] for e in examples])
 
-    input_ids = np.zeros((batch_size, max_input_len), dtype=np.int64)
+    input_ids = np.full((batch_size, max_input_len), 2, dtype=np.int64)
     attention_mask = np.zeros_like(input_ids, dtype=np.bool)
 
     encoder_batch = {INPUT_IDS: input_ids, ATTENTION_MASK: attention_mask}
 
-    decoder_input_ids = np.zeros((batch_size, max_label_len - 1), dtype=np.int64)
+    decoder_input_ids = np.full((batch_size, max_label_len - 1), 2, dtype=np.int64)
     decoder_attention_mask = np.zeros_like(decoder_input_ids, dtype=np.bool)
 
     decoder_batch = {

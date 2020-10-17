@@ -74,6 +74,8 @@ def main(config: omegaconf.OmegaConf):
             callbacks=[pl.callbacks.EarlyStopping("loss")],
         )
 
+    print(tokenizer.convert_tokens_to_ids([tokenizer.pad_token, tokenizer.eos_token, tokenizer.bos_token]))
+
     data_module = bart.BARTDataModule(config.data, tokenizer)
     trainer.fit(model, datamodule=data_module)
 

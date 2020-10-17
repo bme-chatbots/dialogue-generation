@@ -57,6 +57,7 @@ class GPT2Module(pl.LightningModule):
         self.model.resize_token_embeddings(self.hparams.vocab_size)
 
     def forward(self, batch):
+        print(batch[INPUT_IDS])
         output = self.model(
             input_ids=batch[INPUT_IDS],
             attention_mask=batch[ATTENTION_MASK],
