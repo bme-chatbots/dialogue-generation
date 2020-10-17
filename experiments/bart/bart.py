@@ -15,11 +15,15 @@ import transformers
 import itertools
 import datasets
 import functools
+import logging
+import dataclasses
+import collections
 
 import pytorch_lightning as pl
 import numpy as np
 
-PROJECT_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), "..", "..")
+EXPERIMENT_DIR = os.path.abspath(os.path.dirname(__file__))
+PROJECT_DIR = os.path.join(EXPERIMENT_DIR, "..", "..")
 
 # this implementation uses the token_type_id field of the gpt2 transformer
 # for signaling the source of the current utterance
@@ -29,10 +33,16 @@ SPEAKER_TO = "<|speaker_to|>"
 # other than the native eos_id the dialogue model uses sos_id and pad_id
 # as special control
 EOS = "<|endoftext|>"
+SOS = "<|startoftext|>"
+PAD = "<|padding|>"
 
 SPLITS = TRAIN, VALID = datasets.Split.TRAIN, datasets.Split.VALIDATION
 
-INPUT_IDS, ATTENTION_MASK, LABELS = "input_ids", "attention_mask", "labels"
+INPUT_IDS = "input_ids"
+ATTENTION_MASK = "attention_mask"
+DECODER_INPUT_IDS = "decoder_input_ids"
+DECODER_ATTENTION_MASK = "decoder_attention_mask"
+LABELS = "labels"
 
 LABEL_MASK_ID = -100
 
@@ -44,13 +54,13 @@ class ModelCheckpoint(pl.callbacks.ModelCheckpoint):
         return super().format_checkpoint_name(*args, **kwargs).replace("=", ":")
 
 
-class GPT2Module(pl.LightningModule):
+class BARTModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
 
         self.hparams = hparams
 
-        self.model = transformers.GPT2LMHeadModel.from_pretrained(
+        self.model = transformers.BartForConditionalGeneration.from_pretrained(
             self.hparams.pretrained_name
         )
 
@@ -60,23 +70,20 @@ class GPT2Module(pl.LightningModule):
         output = self.model(
             input_ids=batch[INPUT_IDS],
             attention_mask=batch[ATTENTION_MASK],
+            decoder_input_ids=batch[DECODER_INPUT_IDS],
+            decoder_attention_mask=batch[DECODER_ATTENTION_MASK],
+            use_cache=False,
             return_dict=True,
         )
 
         logits = output["logits"].view(-1, output["logits"].size(-1))
-
-        labels = batch[LABELS]
-
-        from_labels = labels == self.hparams.from_id
-        to_labels = labels == self.hparams.to_id
-        labels[from_labels | to_labels] = LABEL_MASK_ID
-
-        labels = labels.view(-1)
+        labels = batch[LABELS].view(-1)
 
         loss = torch.nn.functional.cross_entropy(logits, labels)
-        attention_mask = batch[ATTENTION_MASK].view(-1)
+
+        mask = batch[DECODER_ATTENTION_MASK].view(-1)
         accuracy = (
-            (labels[attention_mask] == logits[attention_mask].argmax(-1))
+            (labels[mask] == logits[mask].argmax(-1))
             .float()
             .mean()
         )
@@ -109,7 +116,7 @@ class GPT2Module(pl.LightningModule):
         return optimizer
 
 
-class GPT2DataModule(pl.LightningDataModule):
+class BARTDataModule(pl.LightningDataModule):
     def __init__(self, config, tokenizer):
         super().__init__()
 
@@ -118,20 +125,27 @@ class GPT2DataModule(pl.LightningDataModule):
         self.dataset = None
 
     def prepare_data(self):
-        def run_script(name):
-            scripts_dir = os.path.join(PROJECT_DIR, "scripts")
-            script = os.path.join(scripts_dir, f"download_{name}.py")
-            params = f"--output_dir {self.config.build_dir} --field {self.config.field}"
+        project_scripts_dir = os.path.join(PROJECT_DIR, "scripts")
+        experiments_script_dir = os.path.join(EXPERIMENT_DIR, "scripts")
 
-            if self.config.rebuild:
-                params += " --force"
+        if self.config.name == "opendialkg":
+            download_script = os.path.join(
+                project_scripts_dir, f"download_opendialkg.py"
+            )
 
-            os.system(f"python {script} {params}")
+            os.system(f"python {download_script} --output_dir {self.config.build_dir}")
 
-        # TODO
-        # upon the release of omegaconf 2.1 this can be changed to contain a list
-        # by defining custom resolvers for the config interpolation
-        run_script(self.config.name)
+            prepare_script = os.path.join(
+                experiments_script_dir, f"prepare_opendialkg.py"
+            )
+
+            params = [
+                f"--input_dir {self.config.build_dir}",
+                f"--output_dir {os.path.join(self.config.build_dir, 'bart')}",
+                f"--field {self.config.field}",
+            ]
+
+            os.system(f"python {prepare_script} {' '.join(params)}")
 
         # instantiating dataset for building the cache file on a single worker
         build_dataset(self.tokenizer, self.config)
@@ -188,7 +202,10 @@ class BucketSampler(torch.utils.data.Sampler):
 
 def build_dataloader(dataset, config, shuffle=True):
     bucket_sampler = BucketSampler(
-        dataset["lengths"]["length"], config.max_length, config.num_buckets, shuffle
+        dataset["lengths"]["length"],
+        config.max_input_length,
+        config.num_buckets,
+        shuffle,
     )
 
     return torch.utils.data.DataLoader(
@@ -220,13 +237,14 @@ def build_dataset(tokenizer, config):
 
 def build_split(examples, tokenizer, split_name, config):
     examples = examples.map(
-        lambda example: build_example(example, tokenizer, config),
+        lambda example: build_examples(example, tokenizer, config),
+        batched=True,
         remove_columns=examples.column_names,
         cache_file_name=os.path.join(config.cache_dir, f"{split_name}.examples.cache"),
     )
 
     lengths = examples.map(
-        lambda example: {"length": len(example[INPUT_IDS]) - 1},
+        lambda example: {"length": len(example[INPUT_IDS])},
         remove_columns=examples.column_names,
         cache_file_name=os.path.join(config.cache_dir, f"{split_name}.lengths.cache"),
     )
@@ -236,15 +254,36 @@ def build_split(examples, tokenizer, split_name, config):
     return {"examples": examples, "lengths": lengths}
 
 
-def build_example(example, tokenizer, config):
-    input_text = flatten_dialogue(example[config.field])
+def build_examples(dialogues, tokenizer, config):
+    def generate_examples():
+        for dialogue in dialogues[config.field]:
+            assert len(dialogue) > 1
 
-    example = tokenizer(
-        input_text,
-        add_special_tokens=False,
-        max_length=config.max_length,
-        truncation=True,
+            for idx in range(2, len(dialogue)):
+                yield build_example(dialogue[:idx], dialogue[idx], tokenizer, config)
+
+    examples = collections.defaultdict(list)
+    for example in generate_examples():
+        for key, value in example.items():
+            examples[key].append(value)
+
+    return examples
+
+
+def build_example(input_texts, label_text, tokenizer, config):
+    example = tokenizer(flatten_dialogue(input_texts), add_special_tokens=False)
+
+    example = {
+        key: value[-config.max_input_length :]
+        for key, value in example.items()
+    }
+
+    decoder_dict = tokenizer(
+        label_text, max_length=config.max_label_length, truncation=True
     )
+
+    for key, value in decoder_dict.items():
+        example[f"decoder_{key}"] = value
 
     return example
 
@@ -252,15 +291,17 @@ def build_example(example, tokenizer, config):
 def flatten_dialogue(dialogue):
     # each dialogue is flattened into a single string where the utterances are
     # preceided by a special role token and finished with an EOS token
-    return  "".join(
-        get_speaker_token(idx) + utterance + EOS
-        for idx, utterance in enumerate(dialogue)
-    )
+    reversed_dialogue = [
+        get_speaker_token(idx) + utterance
+        for idx, utterance in enumerate(reversed(dialogue))
+    ]
+
+    return "".join(reversed_dialogue[::-1])
 
 
 def get_speaker_token(idx):
     # if the idx is even then SPEAKER_TO id is assigned to the idx
-    return SPEAKER_FROM if idx % 2 else SPEAKER_TO
+    return SPEAKER_TO if idx % 2 else SPEAKER_FROM
 
 
 def partition(lengths, max_length, num_buckets):
@@ -281,21 +322,35 @@ def partition(lengths, max_length, num_buckets):
 
 def collate(examples):
     batch_size = len(examples)
-    max_len = max([e[INPUT_IDS].shape[0] for e in examples]) - 1
+    max_input_len = max([e[INPUT_IDS].shape[0] for e in examples])
+    max_label_len = max([e[DECODER_INPUT_IDS].shape[0] for e in examples])
 
-    input_ids = np.zeros((batch_size, max_len), dtype=np.int64)
+    input_ids = np.zeros((batch_size, max_input_len), dtype=np.int64)
     attention_mask = np.zeros_like(input_ids, dtype=np.bool)
-    labels = np.full_like(input_ids, LABEL_MASK_ID)
+
+    encoder_batch = {INPUT_IDS: input_ids, ATTENTION_MASK: attention_mask}
+
+    decoder_input_ids = np.zeros((batch_size, max_label_len - 1), dtype=np.int64)
+    decoder_attention_mask = np.zeros_like(decoder_input_ids, dtype=np.bool)
+
+    decoder_batch = {
+        DECODER_INPUT_IDS: decoder_input_ids,
+        DECODER_ATTENTION_MASK: decoder_attention_mask,
+    }
+
+    labels = np.full_like(decoder_input_ids, LABEL_MASK_ID)
 
     for idx, example in enumerate(examples):
-        input_len = example[INPUT_IDS].shape[0] - 1
-        input_ids[idx, :input_len] = example[INPUT_IDS][:-1]
-        attention_mask[idx, :input_len] = example[ATTENTION_MASK][:-1]
+        input_len = example[INPUT_IDS].shape[0]
+        for key in encoder_batch:
+            encoder_batch[key][idx, :input_len] = example[key]
 
-        labels[idx, :input_len] = example[INPUT_IDS][1:]
+        label_len = example[DECODER_INPUT_IDS].shape[0] - 1
+        for key in decoder_batch:
+            decoder_batch[key][idx, :label_len] = example[key][:-1]
 
-    return {
-        INPUT_IDS: torch.as_tensor(input_ids),
-        LABELS: torch.as_tensor(labels),
-        ATTENTION_MASK: torch.as_tensor(attention_mask),
-    }
+        labels[idx, :label_len] = example[DECODER_INPUT_IDS][1:]
+
+    batch = {LABELS: labels, **encoder_batch, **decoder_batch}
+    return {key: torch.as_tensor(value) for key, value in batch.items()}
+

@@ -1,4 +1,4 @@
-pytorch_lightning==0.9.1rc4
+pytorch_lightning==1.0.2
 hydra-core==1.0.3
 datasets==1.1.0
 transformers==3.3.1

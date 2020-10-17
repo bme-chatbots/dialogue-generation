@@ -4,7 +4,7 @@ defaults:
   - generation: sampling
 
 checkpoint_file: null
-tokenizer_dir: ${data.root}/tokenizer
+tokenizer_dir: ${data.root}/tokenizer/gpt2
 
 seed: 42
 
@@ -37,7 +37,7 @@ data:
   # `max_tokens` is the number of tokens that fit into memory during training
   # note that `batch_size` is computed from this value based on the lengths of the examples
   # e.g. sequences of length 183 and 251 are packed into a batch as their size is < `max_tokens`
-  max_tokens: 512
+  max_length: 512
   # `num_buckets` is used for grouping similar length examples
   # it sets the number of different length groups
   num_buckets: 8

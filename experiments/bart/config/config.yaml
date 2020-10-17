@@ -4,6 +4,7 @@ defaults:
   - generation: sampling
 
 checkpoint_file: null
+tokenizer_dir: ${data.root}/tokenizer/bart
 
 seed: 42
 
@@ -14,16 +15,9 @@ trainer:
   precision: 32
 
 model:
+  pretrained_name: facebook/bart-base
   warmup_steps: 100
   lr: 1e-3
-
-encoder:
-  tokenizer_dir: ${data.root}/tokenizers/encoder/${encoder.pretrained_name}
-  pretrained_name: bert-base-cased
-
-decoder:
-  tokenizer_dir: ${data.root}/tokenizers/decoder/${decoder.pretrained_name}
-  pretrained_name: gpt2
 
 generation:
   # sets the number of previous utterances stored in history
@@ -43,8 +37,8 @@ data:
   # `*_max_tokens` is the number of tokens that fit into memory during training note that
   # `batch_size` is dynamically calculated based on the `src_max_tokens` and the length of 
   # each dialogue source example
-  max_input_tokens: 512
-  max_label_tokens: 128
+  max_input_length: 512
+  max_label_length: 128
   # `num_buckets` is used for grouping similar length examples it sets the number of
   # different length groups
   num_buckets: 8
@@ -55,7 +49,7 @@ data:
   cache_dir: ${data.root}/${data.name}
 
   train:
-    data_pattern: ${data.build_dir}/seq2seq/train/*.jsonl
+    data_pattern: ${data.build_dir}/bart/train/*.jsonl
 
   validation:
-    data_pattern: ${data.build_dir}/seq2seq/validation/*.jsonl
+    data_pattern: ${data.build_dir}/bart/validation/*.jsonl
