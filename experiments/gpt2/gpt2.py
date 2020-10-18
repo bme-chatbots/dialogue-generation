@@ -205,6 +205,8 @@ def build_dataset(tokenizer, config):
         str(split): glob.glob(config.get(str(split)).data_pattern) for split in SPLITS
     }
 
+    os.makedirs(config.cache_dir, exist_ok=True)
+
     dataset = datasets.load_dataset("json", data_files=data_files)
 
     # splits contains a dictionary of dictionary of datasets with 2 keys `examples`

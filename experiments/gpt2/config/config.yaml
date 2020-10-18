@@ -44,8 +44,8 @@ data:
   num_workers: 8
   # `build_dir` is only used for pre-defined datasets where the download scripts 
   # prepare the datasets given by `name`
-  build_dir: ${data.root}/gpt2/${data.name}
-  cache_dir: ${data.build_dir}
+  build_dir: ${data.root}/${data.name}
+  cache_dir: ${data.build_dir}/gpt2
 
   train:
     data_pattern: ${data.build_dir}/train/*.jsonl
