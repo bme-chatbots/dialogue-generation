@@ -24,7 +24,7 @@ pl._logger.handlers = []
 
 @hydra.main(config_path="config", config_name="config")
 def main(config: omegaconf.OmegaConf):
-    logging.info("\n" + omegaconf.OmegaConf.to_yaml(config, resolve=True))
+    logging.info("\n" + omegaconf.OmegaConf.to_yaml(config))
 
     if config.seed is not None:
         pl.trainer.seed_everything(config.seed)

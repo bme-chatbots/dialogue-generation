@@ -119,27 +119,20 @@ class BARTDataModule(pl.LightningDataModule):
         self.dataset = None
 
     def prepare_data(self):
-        project_scripts_dir = os.path.join(PROJECT_DIR, "scripts")
-        experiments_script_dir = os.path.join(EXPERIMENT_DIR, "scripts")
+        def run_script(name):
+            scripts_dir = os.path.join(PROJECT_DIR, "scripts")
+            script = os.path.join(scripts_dir, f"download_{name}.py")
+            params = f"--output_dir {self.config.build_dir} --field {self.config.field}"
 
-        if self.config.name == "opendialkg":
-            download_script = os.path.join(
-                project_scripts_dir, f"download_opendialkg.py"
-            )
+            if self.config.rebuild:
+                params += " --force"
 
-            os.system(f"python {download_script} --output_dir {self.config.build_dir}")
+            os.system(f"python {script} {params}")
 
-            prepare_script = os.path.join(
-                experiments_script_dir, f"prepare_opendialkg.py"
-            )
-
-            params = [
-                f"--input_dir {self.config.build_dir}",
-                f"--output_dir {os.path.join(self.config.build_dir, 'bart')}",
-                f"--field {self.config.field}",
-            ]
-
-            os.system(f"python {prepare_script} {' '.join(params)}")
+        # TODO
+        # upon the release of omegaconf 2.1 this can be changed to contain a list
+        # by defining custom resolvers for the config interpolation
+        run_script(self.config.name)
 
         # instantiating dataset for building the cache file on a single worker
         build_dataset(self.tokenizer, self.config)

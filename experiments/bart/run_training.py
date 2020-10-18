@@ -10,12 +10,10 @@ import os
 import torch
 import hydra
 import logging
-import typing
 import tqdm
 import argparse
 import omegaconf
 import transformers
-import dataclasses
 import bart
 
 import pytorch_lightning as pl
@@ -73,8 +71,6 @@ def main(config: omegaconf.OmegaConf):
             checkpoint_callback=model_checkpoint,
             callbacks=[pl.callbacks.EarlyStopping("loss")],
         )
-
-    print(tokenizer.convert_tokens_to_ids([tokenizer.pad_token, tokenizer.eos_token, tokenizer.bos_token]))
 
     data_module = bart.BARTDataModule(config.data, tokenizer)
     trainer.fit(model, datamodule=data_module)

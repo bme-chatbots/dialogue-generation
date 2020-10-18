@@ -45,11 +45,11 @@ data:
   num_workers: 8
   # `build_dir` this is only used for pre-defined datasets where the download scripts 
   # preprocess the datasets given by `name`
-  build_dir: ${data.root}/${data.name}
-  cache_dir: ${data.root}/${data.name}
+  build_dir: ${data.root}/bart/${data.name}
+  cache_dir: ${data.build_dir}
 
   train:
-    data_pattern: ${data.build_dir}/bart/train/*.jsonl
+    data_pattern: ${data.build_dir}/train/*.jsonl
 
   validation:
-    data_pattern: ${data.build_dir}/bart/validation/*.jsonl
+    data_pattern: ${data.build_dir}/validation/*.jsonl
