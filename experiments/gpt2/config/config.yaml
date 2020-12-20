@@ -4,7 +4,7 @@ defaults:
   - generation: sampling
 
 checkpoint_file: null
-tokenizer_dir: ${data.root}/tokenizer/gpt2
+tokenizer_dir: ${data.root}/tokenizer/${model.pretrained_name}
 
 seed: 42
 

@@ -21,13 +21,11 @@ import numpy as np
 
 PROJECT_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), "..", "..")
 
-# this implementation uses the token_type_id field of the gpt2 transformer
-# for signaling the source of the current utterance
+# this implementation uses speaker ids as spearator between utterances
+# to help the model differentiate between actors in the dialogue
 SPEAKER_FROM = "<|speaker_from|>"
 SPEAKER_TO = "<|speaker_to|>"
 
-# other than the native eos_id the dialogue model uses sos_id and pad_id
-# as special control
 EOS = "<|endoftext|>"
 
 SPLITS = TRAIN, VALID = datasets.Split.TRAIN, datasets.Split.VALIDATION
@@ -121,7 +119,7 @@ class GPT2DataModule(pl.LightningDataModule):
         def run_script(name):
             scripts_dir = os.path.join(PROJECT_DIR, "scripts")
             script = os.path.join(scripts_dir, f"download_{name}.py")
-            params = f"--output_dir {self.config.build_dir} --field {self.config.field}"
+            params = f'--output_dir "{self.config.build_dir}" --field "{self.config.field}"'
 
             if self.config.rebuild:
                 params += " --force"

@@ -55,6 +55,8 @@ def main(config: omegaconf.OmegaConf):
 
     context = []
 
+    eos_id = tokenizer.convert_tokens_to_ids(tokenizer.eos_token)
+
     while True:
         context.append(input("user >>> "))
         # with history size 0 only the last utterance will be used as input
@@ -64,6 +66,7 @@ def main(config: omegaconf.OmegaConf):
         response_ids = lightning_model.model.generate(
             input_ids,
             **config.generation,
+            pad_token_id=eos_id,
             bad_words_ids=speaker_token_ids,
         )
 
