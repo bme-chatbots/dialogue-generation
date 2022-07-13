@@ -149,8 +149,6 @@ User: are you in a relationship?
 Bot: yes i am married, 3 boys, i am pregnant again. i am too busy to focus
 ```
 
-![gpt2-personachat](https://i.imgur.com/B4ukDkC.png)
-
 ----
 
 The below dialog is sampled from `gpt2` trained with default parameters for 8 epochs ( 48824 steps ) and `--max_hist 3` on `DailyDialog` dataset.
@@ -176,5 +174,3 @@ User: are you a student ?
 
 Bot: yes. I am a student too.
 ```
-
-![gpt2-dailydialog](https://i.imgur.com/LmhHdW1.png)
